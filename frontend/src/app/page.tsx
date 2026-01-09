@@ -1,65 +1,77 @@
-import Image from "next/image";
-
 export default function Home() {
 	return (
-		<div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-			<main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-				<Image
-					className="dark:invert"
-					src="/next.svg"
-					alt="Next.js logo"
-					width={100}
-					height={20}
-					priority
-				/>
-				<div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-					<h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-						To get started, edit the page.tsx file.
+		<div className="bg-notebook-grid min-h-screen">
+			<div className="mx-auto max-w-3xl px-6 py-16 md:px-12 md:py-24">
+				{/* Hero Section */}
+				<div className="mb-12 text-center">
+					<h1 className="mb-4 text-5xl md:text-6xl">
+						<span className="font-serif italic text-brand-green">Tune into</span>
+						<br />
+						<span className="font-sans font-bold text-text-primary">the signal.</span>
 					</h1>
-					<p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-						Looking for a starting point or more instructions? Head over to{" "}
-						<a
-							href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-							className="font-medium text-zinc-950 dark:text-zinc-50"
-						>
-							Templates
-						</a>{" "}
-						or the{" "}
-						<a
-							href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-							className="font-medium text-zinc-950 dark:text-zinc-50"
-						>
-							Learning
-						</a>{" "}
-						center.
+					<p className="font-mono text-sm tracking-caps text-text-primary">
+						A curated directory of the best technical meetups.
+						<br />
+						No noise, just deep cuts.
 					</p>
 				</div>
-				<div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-					<a
-						className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-						href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						<Image
-							className="dark:invert"
-							src="/vercel.svg"
-							alt="Vercel logomark"
-							width={16}
-							height={16}
+
+				{/* Discovery Chat Card */}
+				<div className="rounded-xl border border-border-light bg-white p-8 shadow-md">
+					<h2 className="mb-6 text-lg font-medium text-text-secondary">
+						What are you looking for?
+					</h2>
+
+					{/* Search Input */}
+					<div className="mb-6">
+						<input
+							type="text"
+							placeholder="Find AI meetups this weekend..."
+							className="w-full rounded-lg border border-border-light bg-white px-4 py-3 text-text-primary placeholder:text-text-secondary focus:border-brand-green focus:outline-none focus:ring-1 focus:ring-brand-green"
 						/>
-						Deploy Now
-					</a>
-					<a
-						className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-						href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-						target="_blank"
-						rel="noopener noreferrer"
-					>
-						Documentation
-					</a>
+					</div>
+
+					{/* Quick Picks */}
+					<div className="mb-6">
+						<p className="mb-3 text-xs font-medium tracking-caps text-text-secondary">
+							Quick picks
+						</p>
+						<div className="flex flex-wrap gap-2">
+							<button
+								type="button"
+								className="rounded-full bg-bg-cream px-4 py-2 text-sm font-medium text-text-primary hover:bg-accent-yellow transition-colors"
+							>
+								This weekend
+							</button>
+							<button
+								type="button"
+								className="rounded-full bg-bg-cream px-4 py-2 text-sm font-medium text-text-primary hover:bg-accent-yellow transition-colors"
+							>
+								AI/Tech
+							</button>
+							<button
+								type="button"
+								className="rounded-full bg-bg-cream px-4 py-2 text-sm font-medium text-text-primary hover:bg-accent-yellow transition-colors"
+							>
+								Startups
+							</button>
+							<button
+								type="button"
+								className="rounded-full bg-bg-cream px-4 py-2 text-sm font-medium text-text-primary hover:bg-accent-yellow transition-colors"
+							>
+								Free events
+							</button>
+						</div>
+					</div>
 				</div>
-			</main>
+
+				{/* Tape Accent Callout */}
+				<div className="mt-8 flex justify-center">
+					<div className="tape-accent inline-block rounded bg-accent-yellow px-4 py-2 text-sm font-bold text-text-primary">
+						Starts Here!
+					</div>
+				</div>
+			</div>
 		</div>
 	);
 }
