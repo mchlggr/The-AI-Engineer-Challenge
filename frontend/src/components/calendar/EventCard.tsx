@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, cssVars, deterministicRotationDeg } from "@/lib/utils";
 import type { CalendarEvent, EventCategory } from "./types";
 
 interface EventCardProps {
@@ -17,11 +17,25 @@ const categoryStyles: Record<EventCategory, string> = {
 	ai: "category-ai",
 };
 
+const categoryLabels: Record<EventCategory, string> = {
+	meetup: "Meetup",
+	startup: "Startup",
+	community: "Community",
+	ai: "AI",
+};
+
 const categoryBadgeStyles: Record<EventCategory, string> = {
 	meetup: "bg-accent-orange text-white",
 	startup: "bg-brand-green text-white",
 	community: "bg-accent-teal text-white",
 	ai: "bg-accent-blue text-white",
+};
+
+const categoryTapeColors: Record<EventCategory, string> = {
+	meetup: "var(--color-accent-orange)",
+	startup: "var(--color-brand-green)",
+	community: "var(--color-accent-teal)",
+	ai: "var(--color-accent-blue)",
 };
 
 function formatTime(date: Date): string {
@@ -37,6 +51,12 @@ export function EventCard({
 	onHover,
 	className,
 }: EventCardProps) {
+	const tiltDeg = deterministicRotationDeg(event.id, {
+		min: -2,
+		max: 2,
+		step: 0.5,
+	});
+
 	const handleClick = () => {
 		onClick?.(event);
 		if (event.canonicalUrl) {
@@ -48,34 +68,39 @@ export function EventCard({
 		<button
 			type="button"
 			className={cn(
-				"group w-full cursor-pointer rounded-lg border border-border-light bg-bg-white p-2 text-left shadow-sm transition-all",
-				"hover:-translate-y-0.5 hover:shadow-md",
+				"paper-card event-sticker w-full cursor-pointer p-3 text-left",
 				categoryStyles[event.category],
 				className,
 			)}
+			style={cssVars({ "--cc-rotate": `${tiltDeg}deg` })}
 			onClick={handleClick}
 			onMouseEnter={(e) => onHover?.(event, e.currentTarget)}
 			onMouseLeave={() => onHover?.(null)}
 		>
-			{/* Category badge for meetups */}
-			{event.category === "meetup" && (
-				<span
-					className={cn(
-						"mb-1 inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
-						categoryBadgeStyles[event.category],
-					)}
-				>
-					Meetup
-				</span>
-			)}
+			{/* Color tape */}
+			<div
+				className="event-tape"
+				style={{
+					backgroundColor: categoryTapeColors[event.category],
+					rotate: "-2deg",
+				}}
+			/>
 
-			{/* Time */}
-			<time className="event-time block">{formatTime(event.startTime)}</time>
+			<div className="pt-2">
+				<div className="flex items-center justify-between gap-2">
+					<span className="event-time-pill">{formatTime(event.startTime)}</span>
+					<span
+						className={cn("event-badge", categoryBadgeStyles[event.category])}
+					>
+						{categoryLabels[event.category]}
+					</span>
+				</div>
 
-			{/* Title */}
-			<h3 className="mt-0.5 line-clamp-2 text-[13px] font-medium text-text-primary">
-				{event.title}
-			</h3>
+				{/* Title */}
+				<h3 className="mt-2 line-clamp-2 text-[13px] font-bold text-text-primary">
+					{event.title}
+				</h3>
+			</div>
 		</button>
 	);
 }

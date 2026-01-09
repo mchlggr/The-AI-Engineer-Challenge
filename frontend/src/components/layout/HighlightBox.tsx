@@ -8,7 +8,7 @@ interface HighlightBoxProps {
 export function HighlightBox({ children, className }: HighlightBoxProps) {
 	return (
 		<div className={cn("highlight-box max-w-md", className)}>
-			<p className="tagline">{children}</p>
+			<p className="highlight-quote">{children}</p>
 		</div>
 	);
 }

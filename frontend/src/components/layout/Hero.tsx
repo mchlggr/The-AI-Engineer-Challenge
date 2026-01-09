@@ -10,10 +10,10 @@ export function Hero({ className }: HeroProps) {
 			{/* Headline with orange dot accent */}
 			<div className="flex items-start gap-3">
 				{/* Orange dot accent */}
-				<div className="mt-3 h-3 w-3 flex-shrink-0 rounded-full bg-accent-orange" />
+				<div className="mt-3 h-4 w-4 flex-shrink-0 rounded-full border-2 border-text-primary bg-accent-orange" />
 
 				{/* Headline text */}
-				<h1 className="text-4xl leading-tight md:text-5xl">
+				<h1 className="font-serif text-5xl leading-[0.9] text-text-primary md:text-7xl">
 					<span className="hero-accent block">Tune into</span>
 					<span className="hero-emphasis block">the signal.</span>
 				</h1>
