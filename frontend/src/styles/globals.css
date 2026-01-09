@@ -7,16 +7,19 @@
   /* Base theme tokens */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-serif: var(--font-serif);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+  --font-serif: var(--font-instrument);
+  --font-marker: var(--font-marker);
+  --font-display: var(--font-tilt-warp);
 
   /* Calendar Club Design System Colors */
-  --color-brand-green: #2D6A4F;
-  --color-accent-orange: #E76F51;
-  --color-accent-yellow: #F4D35E;
+  --color-brand-green: #047857;
+  --color-accent-red: #DC2626;
+  --color-accent-yellow: #FDE047;
+  --color-accent-orange: #F97316;
+  --color-accent-blue: #3B82F6;
   --color-accent-teal: #2A9D8F;
-  --color-accent-blue: #457B9D;
   --color-text-primary: #1D3557;
   --color-text-secondary: #6B7280;
   --color-bg-cream: #FDFBF7;

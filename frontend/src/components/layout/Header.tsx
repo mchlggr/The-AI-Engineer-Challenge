@@ -14,10 +14,8 @@ export function Header({ className }: HeaderProps) {
 		>
 			{/* Logo */}
 			<div className="flex items-center">
-				<div className="rounded-lg bg-brand-green px-4 py-2">
-					<span className="text-lg font-semibold text-white">
-						Calendar Club
-					</span>
+				<div className="rounded-lg bg-brand-green px-5 py-3 shadow-md">
+					<span className="font-display text-xl text-white">Calendar Club</span>
 				</div>
 			</div>
 
