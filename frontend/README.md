@@ -18,6 +18,18 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## API (Local Development)
+
+This frontend calls `/api/*` endpoints. In development, `frontend/next.config.ts` proxies those requests to a FastAPI server (default: `http://127.0.0.1:8000`).
+
+Start the API from the repo root:
+
+```bash
+uv run uvicorn api.index:app --reload
+```
+
+If your API runs on a different host/port, set `API_PROXY_TARGET` in `frontend/.env.local` (see `frontend/.env.local.example`).
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

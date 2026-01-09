@@ -2,7 +2,12 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { CalendarEvent } from "@/components/calendar";
-import { api, type ChatStreamEvent, type EventResult } from "@/lib/api";
+import {
+	ApiError,
+	api,
+	type ChatStreamEvent,
+	type EventResult,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ChatInput } from "./ChatInput";
 import { ClarifyingQ, type QuestionType } from "./ClarifyingQ";
@@ -112,12 +117,16 @@ export function DiscoveryChat({
 			};
 
 			const handleError = (error: Error) => {
+				const hint =
+					error instanceof ApiError && error.status === 404
+						? " (Is the API running? In local dev, start FastAPI on :8000 and use the Next.js /api proxy.)"
+						: "";
 				setMessages((prev) => [
 					...prev,
 					{
 						id: crypto.randomUUID(),
 						role: "agent",
-						content: `Sorry, there was an error: ${error.message}`,
+						content: `Sorry, there was an error: ${error.message}${hint}`,
 					},
 				]);
 				setStreamingMessage("");
