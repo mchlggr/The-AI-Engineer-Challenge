@@ -6,7 +6,7 @@ import type { CalendarEvent, EventCategory } from "./types";
 interface EventCardProps {
 	event: CalendarEvent;
 	onClick?: (event: CalendarEvent) => void;
-	onHover?: (event: CalendarEvent | null) => void;
+	onHover?: (event: CalendarEvent | null, element?: HTMLElement) => void;
 	className?: string;
 }
 
@@ -54,7 +54,7 @@ export function EventCard({
 				className,
 			)}
 			onClick={handleClick}
-			onMouseEnter={() => onHover?.(event)}
+			onMouseEnter={(e) => onHover?.(event, e.currentTarget)}
 			onMouseLeave={() => onHover?.(null)}
 		>
 			{/* Category badge for meetups */}

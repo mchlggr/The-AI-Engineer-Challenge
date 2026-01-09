@@ -1,8 +1,10 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
 import { DayColumn } from "./DayColumn";
 import { EventCard } from "./EventCard";
+import { EventPeek } from "./EventPeek";
 import type { CalendarEvent } from "./types";
 import { WeekHeader } from "./WeekHeader";
 
@@ -51,6 +53,21 @@ export function WeekView({
 	className,
 }: WeekViewProps) {
 	const today = new Date();
+	const [hoveredEvent, setHoveredEvent] = useState<CalendarEvent | null>(null);
+	const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+
+	const handleEventHover = useCallback(
+		(event: CalendarEvent | null, element?: HTMLElement) => {
+			setHoveredEvent(event);
+			if (event && element) {
+				setAnchorRect(element.getBoundingClientRect());
+			} else {
+				setAnchorRect(null);
+			}
+			onEventHover?.(event);
+		},
+		[onEventHover],
+	);
 
 	const days = Array.from({ length: 7 }, (_, i) => {
 		const date = new Date(weekStart);
@@ -95,13 +112,16 @@ export function WeekView({
 									key={event.id}
 									event={event}
 									onClick={onEventClick}
-									onHover={onEventHover}
+									onHover={handleEventHover}
 								/>
 							))}
 						</DayColumn>
 					);
 				})}
 			</div>
+
+			{/* Event peek tooltip */}
+			<EventPeek event={hoveredEvent} anchorRect={anchorRect} />
 		</div>
 	);
 }
