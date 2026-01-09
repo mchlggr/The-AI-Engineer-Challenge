@@ -68,4 +68,5 @@ clarifying_agent = Agent(
     instructions=CLARIFYING_AGENT_INSTRUCTIONS,
     model="gpt-4o",
     output_type=SearchProfile,
+    handoffs=[],  # Will be connected in __init__.py to avoid circular imports
 )
