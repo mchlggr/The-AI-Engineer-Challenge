@@ -84,7 +84,8 @@ export interface ChatStreamEvent {
 		| "action"
 		| "phase"
 		| "quick_picks"
-		| "ready_to_search";
+		| "ready_to_search"
+		| "searching";
 	content?: string;
 	error?: string;
 	session_id: string;

@@ -81,6 +81,7 @@ export function DiscoveryChat({
 	const [sessionId] = useState(() => crypto.randomUUID());
 	// null = show static defaults, [] = hide quick picks, [...] = show LLM picks
 	const [quickPicks, setQuickPicks] = useState<QuickPickOption[] | null>(null);
+	const [isSearching, setIsSearching] = useState(false);
 	const streamAbortRef = useRef<{ abort: () => void } | null>(null);
 	const streamingMessageRef = useRef<string>("");
 	const hasProcessedDoneRef = useRef<boolean>(false);
@@ -93,6 +94,7 @@ export function DiscoveryChat({
 			streamingMessageRef.current = "";
 			hasProcessedDoneRef.current = false;
 			setIsProcessing(true);
+			setIsSearching(false);
 			// Hide quick picks while processing
 			setQuickPicks([]);
 
@@ -101,6 +103,9 @@ export function DiscoveryChat({
 					// Track content in ref for reliable "done" handling
 					streamingMessageRef.current += event.content;
 					setStreamingMessage(streamingMessageRef.current);
+				} else if (event.type === "searching") {
+					// Backend is now searching - show searching state
+					setIsSearching(true);
 				} else if (event.type === "quick_picks" && event.quick_picks) {
 					// LLM sent dynamic quick picks
 					setQuickPicks(event.quick_picks);
@@ -137,6 +142,7 @@ export function DiscoveryChat({
 					setStreamingMessage("");
 					streamingMessageRef.current = "";
 					setIsProcessing(false);
+					setIsSearching(false);
 					// NO MOCK DATA - if no events found, show empty state
 					// All events must come from real API sources (Eventbrite, etc.)
 				} else if (event.type === "error") {
@@ -224,22 +230,41 @@ export function DiscoveryChat({
 							className={cn(
 								"max-w-md rounded-lg px-4 py-3",
 								message.role === "user"
-									? "ml-auto border-l-[3px] border-accent-orange bg-bg-cream"
-									: "border-l-[3px] border-brand-green bg-bg-white shadow-sm",
+									? "ml-auto bg-accent-orange text-white"
+									: "bg-brand-100 text-text-primary shadow-sm",
 							)}
 						>
-							<p className="text-sm text-text-primary">{message.content}</p>
+							<p className="text-sm">{message.content}</p>
 						</div>
 					))}
 
-					{/* Streaming response bubble (ChatGPT-style) */}
+					{/* Streaming response bubble */}
 					{isProcessing && (
-						<div className="max-w-md rounded-lg border-l-[3px] border-brand-green bg-bg-white px-4 py-3 shadow-sm">
+						<div className="max-w-md rounded-lg bg-brand-100 px-4 py-3 shadow-sm">
 							{streamingMessage ? (
 								<p className="whitespace-pre-wrap text-sm text-text-primary">
 									{streamingMessage}
 									<span className="ml-1 inline-block h-4 w-2 animate-pulse bg-brand-green" />
 								</p>
+							) : isSearching ? (
+								<div className="flex items-center gap-3">
+									<svg
+										className="h-5 w-5 animate-pulse text-brand-green"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											strokeWidth={2}
+											d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+										/>
+									</svg>
+									<p className="text-sm font-medium text-brand-green">
+										Searching events...
+									</p>
+								</div>
 							) : (
 								<div className="flex items-center gap-2">
 									<div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-green border-t-transparent" />

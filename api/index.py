@@ -73,6 +73,7 @@ async def stream_chat_response(
         from agents import Runner
 
         from api.agents import clarifying_agent
+        from api.agents.search import search_events
 
         # Build conversation history for the agent
         messages = []
@@ -102,15 +103,29 @@ async def stream_chat_response(
                 ]
                 yield sse_event("quick_picks", {"quick_picks": quick_picks_data})
 
-            # Send ready_to_search status
-            if output.ready_to_search:
-                search_profile = None
-                if output.search_profile:
-                    search_profile = output.search_profile.model_dump()
-                yield sse_event(
-                    "ready_to_search",
-                    {"ready": True, "search_profile": search_profile},
-                )
+            # If ready to search, actually perform the search
+            if output.ready_to_search and output.search_profile:
+                # Emit searching state so frontend can show searching UI
+                yield sse_event("searching", {})
+
+                # Perform the actual search
+                search_result = search_events(output.search_profile)
+
+                # Convert to frontend event format and emit
+                if search_result.events:
+                    events_data = [
+                        {
+                            "id": evt.id,
+                            "title": evt.title,
+                            "startTime": evt.date,
+                            "location": evt.location,
+                            "categories": [evt.category],
+                            "url": evt.url,
+                            "source": search_result.source,
+                        }
+                        for evt in search_result.events
+                    ]
+                    yield sse_event("events", {"events": events_data})
 
         yield sse_event("done", {})
 
