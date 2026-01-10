@@ -127,48 +127,8 @@ export function DiscoveryChat({
 						return "";
 					});
 					setIsProcessing(false);
-
-					// If no events were sent, show mock results for now
-					if (pendingResults.length === 0) {
-						const mockResults: CalendarEvent[] = [
-							{
-								id: "1",
-								title: "AI/ML Meetup: Large Language Models",
-								startTime: new Date(Date.now() + 86400000),
-								endTime: new Date(Date.now() + 86400000 + 7200000),
-								category: "ai",
-								venue: "Tech Hub",
-								neighborhood: "Downtown",
-								canonicalUrl: "https://example.com/event/1",
-								sourceId: "meetup-1",
-							},
-							{
-								id: "2",
-								title: "Startup Pitch Night",
-								startTime: new Date(Date.now() + 172800000),
-								endTime: new Date(Date.now() + 172800000 + 10800000),
-								category: "startup",
-								venue: "Innovation Center",
-								neighborhood: "University District",
-								canonicalUrl: "https://example.com/event/2",
-								sourceId: "meetup-2",
-							},
-							{
-								id: "3",
-								title: "Community Tech Talks",
-								startTime: new Date(Date.now() + 259200000),
-								endTime: new Date(Date.now() + 259200000 + 7200000),
-								category: "community",
-								venue: "Public Library",
-								neighborhood: "Midtown",
-								canonicalUrl: "https://example.com/event/3",
-								sourceId: "meetup-3",
-							},
-						];
-						setPendingResults(mockResults);
-						onResultsReady(mockResults);
-						trackEventsDiscovered({ count: mockResults.length });
-					}
+					// NO MOCK DATA - if no events found, show empty state
+					// All events must come from real API sources (Eventbrite, etc.)
 				} else if (event.type === "error") {
 					setMessages((prev) => [
 						...prev,
@@ -234,12 +194,6 @@ export function DiscoveryChat({
 		[sessionId, onSearch, startChatStream],
 	);
 
-	const handleRefine = () => {
-		// Clear results and show quick picks again
-		setPendingResults([]);
-		setQuickPicks(null);
-	};
-
 	// Determine if we should show results
 	const showResults = !isProcessing && pendingResults.length > 0;
 
@@ -250,8 +204,8 @@ export function DiscoveryChat({
 				className,
 			)}
 		>
-			{/* Chat messages - including streaming response */}
-			{(messages.length > 0 || isProcessing) && (
+			{/* Chat messages - including streaming response and results */}
+			{(messages.length > 0 || isProcessing || showResults) && (
 				<div className="flex flex-col gap-4">
 					{/* Past messages */}
 					{messages.map((message) => (
@@ -284,50 +238,38 @@ export function DiscoveryChat({
 							)}
 						</div>
 					)}
+
+					{/* Results integrated in chat flow */}
+					{showResults && (
+						<ResultsPreview
+							events={pendingResults}
+							totalCount={pendingResults.length}
+							onViewWeek={onViewWeek}
+						/>
+					)}
 				</div>
 			)}
 
-			{/* Input area - always visible except when showing results */}
-			{!showResults && (
-				<div className="flex flex-col gap-4">
-					<ChatInput
-						onSubmit={handleUserInput}
-						defaultValue={initialQuery}
-						disabled={isProcessing}
+			{/* Quick picks - above input */}
+			{!isProcessing && (quickPicks === null || quickPicks.length > 0) && (
+				<div>
+					<p className="mb-2 text-xs font-medium uppercase tracking-wide text-text-secondary">
+						Quick picks
+					</p>
+					<QuickPicks
+						options={quickPicks ?? undefined}
+						onSelect={handleUserInput}
 					/>
-					{/* Show quick picks when not processing: null = defaults, [] = hide, [...] = LLM picks */}
-					{!isProcessing && (quickPicks === null || quickPicks.length > 0) && (
-						<div>
-							<p className="mb-2 text-xs font-medium uppercase tracking-wide text-text-secondary">
-								Quick picks
-							</p>
-							<QuickPicks
-								options={quickPicks ?? undefined}
-								onSelect={handleUserInput}
-							/>
-						</div>
-					)}
-					{/* Show LLM quick picks during processing if available */}
-					{isProcessing && quickPicks && quickPicks.length > 0 && (
-						<div>
-							<p className="mb-2 text-xs font-medium uppercase tracking-wide text-text-secondary">
-								Or try these
-							</p>
-							<QuickPicks options={quickPicks} onSelect={handleUserInput} />
-						</div>
-					)}
 				</div>
 			)}
 
-			{/* Results */}
-			{showResults && (
-				<ResultsPreview
-					events={pendingResults}
-					totalCount={pendingResults.length}
-					onViewWeek={onViewWeek}
-					onRefine={handleRefine}
-				/>
-			)}
+			{/* Input - ALWAYS at the bottom */}
+			<ChatInput
+				onSubmit={handleUserInput}
+				defaultValue={initialQuery}
+				disabled={isProcessing}
+				placeholder={showResults ? "Narrow it down..." : "Search events..."}
+			/>
 		</div>
 	);
 }

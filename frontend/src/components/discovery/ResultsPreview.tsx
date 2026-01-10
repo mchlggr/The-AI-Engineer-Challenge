@@ -11,7 +11,6 @@ interface ResultsPreviewProps {
 	events: CalendarEvent[];
 	totalCount: number;
 	onViewWeek: () => void;
-	onRefine?: () => void;
 	onEventClick?: (event: CalendarEvent) => void;
 	className?: string;
 }
@@ -45,7 +44,6 @@ export function ResultsPreview({
 	events,
 	totalCount,
 	onViewWeek,
-	onRefine,
 	onEventClick,
 	className,
 }: ResultsPreviewProps) {
@@ -161,15 +159,6 @@ export function ResultsPreview({
 					<Download className="h-4 w-4" />
 					{isExporting ? "Exporting..." : "Add all to calendar"}
 				</button>
-				{onRefine && (
-					<button
-						type="button"
-						onClick={onRefine}
-						className="btn-brutal cc-btn-secondary hover:bg-bg-cream"
-					>
-						Narrow it down
-					</button>
-				)}
 			</div>
 		</div>
 	);
