@@ -76,7 +76,7 @@ export function ClarifyingQ({
 
 				{/* Message bubble */}
 				<div className="cc-bubble cc-bubble-agent max-w-md">
-					<p className="cc-body font-medium">{config.question}</p>
+					<p className="cc-body font-medium text-white">{config.question}</p>
 				</div>
 			</div>
 

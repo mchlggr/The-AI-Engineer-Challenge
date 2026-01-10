@@ -217,7 +217,7 @@ export function DiscoveryChat({
 									: "cc-bubble-agent",
 							)}
 						>
-							<p className="cc-body">{message.content}</p>
+							<p className="cc-body text-white">{message.content}</p>
 						</div>
 					))}
 				</div>
