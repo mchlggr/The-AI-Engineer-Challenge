@@ -226,11 +226,19 @@ export function DiscoveryChat({
 			{/* State-specific content */}
 			{state === "initial" && (
 				<div className="flex flex-col gap-4">
-					<ChatInput onSubmit={handleSubmit} defaultValue={initialQuery} />
+					{/* Initial greeting when no messages */}
+					{messages.length === 0 && (
+						<div className="cc-bubble cc-bubble-agent max-w-md">
+							<p className="cc-body">
+								Hey! I'm your event discovery assistant. Tell me what kind of events you're looking for - like "tech meetups this weekend" or "free art shows near me".
+							</p>
+						</div>
+					)}
 					<div>
 						<p className="mb-2 cc-label-muted">Quick picks</p>
 						<QuickPicks onSelect={handleQuickPick} />
 					</div>
+					<ChatInput onSubmit={handleSubmit} defaultValue={initialQuery} placeholder="What events are you looking for?" />
 				</div>
 			)}
 
