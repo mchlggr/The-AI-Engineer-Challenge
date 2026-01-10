@@ -242,8 +242,6 @@ export function DiscoveryChat({
 
 	// Determine if we should show results
 	const showResults = !isProcessing && pendingResults.length > 0;
-	// Determine if we should show input (when not processing and no results)
-	const showInput = !isProcessing && !showResults;
 
 	return (
 		<div
@@ -252,9 +250,10 @@ export function DiscoveryChat({
 				className,
 			)}
 		>
-			{/* Chat messages */}
-			{messages.length > 0 && (
+			{/* Chat messages - including streaming response */}
+			{(messages.length > 0 || isProcessing) && (
 				<div className="flex flex-col gap-4">
+					{/* Past messages */}
 					{messages.map((message) => (
 						<div
 							key={message.id}
@@ -268,15 +267,36 @@ export function DiscoveryChat({
 							<p className="text-sm text-text-primary">{message.content}</p>
 						</div>
 					))}
+
+					{/* Streaming response bubble (ChatGPT-style) */}
+					{isProcessing && (
+						<div className="max-w-md rounded-lg border-l-[3px] border-brand-green bg-bg-white px-4 py-3 shadow-sm">
+							{streamingMessage ? (
+								<p className="whitespace-pre-wrap text-sm text-text-primary">
+									{streamingMessage}
+									<span className="ml-1 inline-block h-4 w-2 animate-pulse bg-brand-green" />
+								</p>
+							) : (
+								<div className="flex items-center gap-2">
+									<div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-green border-t-transparent" />
+									<p className="text-sm text-text-secondary">Thinking...</p>
+								</div>
+							)}
+						</div>
+					)}
 				</div>
 			)}
 
-			{/* Input area with quick picks */}
-			{showInput && (
+			{/* Input area - always visible except when showing results */}
+			{!showResults && (
 				<div className="flex flex-col gap-4">
-					<ChatInput onSubmit={handleUserInput} defaultValue={initialQuery} />
-					{/* Show quick picks: null = defaults, [] = hide, [...] = LLM picks */}
-					{quickPicks !== null && quickPicks.length === 0 ? null : (
+					<ChatInput
+						onSubmit={handleUserInput}
+						defaultValue={initialQuery}
+						disabled={isProcessing}
+					/>
+					{/* Show quick picks when not processing: null = defaults, [] = hide, [...] = LLM picks */}
+					{!isProcessing && (quickPicks === null || quickPicks.length > 0) && (
 						<div>
 							<p className="mb-2 text-xs font-medium uppercase tracking-wide text-text-secondary">
 								Quick picks
@@ -287,29 +307,9 @@ export function DiscoveryChat({
 							/>
 						</div>
 					)}
-				</div>
-			)}
-
-			{/* Processing state */}
-			{isProcessing && (
-				<div className="flex flex-col gap-3 rounded-lg bg-bg-cream p-4">
-					<div className="flex items-center gap-3">
-						<div className="h-5 w-5 animate-spin rounded-full border-2 border-brand-green border-t-transparent" />
-						<p className="text-sm text-text-secondary">
-							{streamingMessage ? "Thinking..." : "Searching through events..."}
-						</p>
-					</div>
-					{streamingMessage && (
-						<div className="rounded-lg border-l-[3px] border-brand-green bg-bg-white px-4 py-3 shadow-sm">
-							<p className="whitespace-pre-wrap text-sm text-text-primary">
-								{streamingMessage}
-								<span className="ml-1 inline-block h-4 w-2 animate-pulse bg-brand-green" />
-							</p>
-						</div>
-					)}
 					{/* Show LLM quick picks during processing if available */}
-					{quickPicks && quickPicks.length > 0 && (
-						<div className="mt-2">
+					{isProcessing && quickPicks && quickPicks.length > 0 && (
+						<div>
 							<p className="mb-2 text-xs font-medium uppercase tracking-wide text-text-secondary">
 								Or try these
 							</p>

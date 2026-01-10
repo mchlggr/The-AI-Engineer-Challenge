@@ -91,14 +91,14 @@ async def stream_chat_response(
             message_text = output.message
             for i in range(0, len(message_text), 10):
                 chunk = message_text[i : i + 10]
-                yield sse_event("content", {"text": chunk})
+                yield sse_event("content", {"content": chunk})
 
             # Send quick picks if any
             if output.quick_picks:
                 quick_picks_data = [
                     {"label": qp.label, "value": qp.value} for qp in output.quick_picks
                 ]
-                yield sse_event("quick_picks", {"options": quick_picks_data})
+                yield sse_event("quick_picks", {"quick_picks": quick_picks_data})
 
             # Send ready_to_search status
             if output.ready_to_search:
