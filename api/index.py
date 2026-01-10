@@ -1,11 +1,15 @@
+"""API endpoints for Calendar Club discovery chat."""
+
+import json
+import os
+from collections.abc import AsyncGenerator
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from openai import OpenAI
-import os
-import json
-from dotenv import load_dotenv
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -24,6 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 def get_openai_client() -> OpenAI:
     """Lazy-initialize OpenAI client to allow server boot without API key."""
     api_key = os.getenv("OPENAI_API_KEY")
@@ -33,83 +38,123 @@ def get_openai_client() -> OpenAI:
 
 
 class ChatRequest(BaseModel):
+    """Request body for chat endpoint."""
+
     message: str
+    conversation_id: str | None = None
+
+
+class ConversationMessage(BaseModel):
+    """A message in the conversation history."""
+
+    role: str
+    content: str
 
 
 class ChatStreamRequest(BaseModel):
-    session_id: str
+    """Request body for streaming chat endpoint."""
+
     message: str
+    history: list[ConversationMessage] = []
+
+
+def sse_event(event_type: str, data: dict) -> str:
+    """Format a Server-Sent Event."""
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
+async def stream_chat_response(
+    message: str, history: list[ConversationMessage]
+) -> AsyncGenerator[str, None]:
+    """Stream chat response using the clarifying agent."""
+    try:
+        from agents import Runner
+
+        from api.agents import clarifying_agent
+
+        # Build conversation history for the agent
+        messages = []
+        for msg in history:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": message})
+
+        # Run the agent with streaming
+        result = await Runner.run(
+            clarifying_agent,
+            messages,
+        )
+
+        # Stream the message content
+        if result.final_output:
+            output = result.final_output
+            # Stream the message in chunks for responsiveness
+            message_text = output.message
+            for i in range(0, len(message_text), 10):
+                chunk = message_text[i : i + 10]
+                yield sse_event("content", {"text": chunk})
+
+            # Send quick picks if any
+            if output.quick_picks:
+                quick_picks_data = [
+                    {"label": qp.label, "value": qp.value} for qp in output.quick_picks
+                ]
+                yield sse_event("quick_picks", {"options": quick_picks_data})
+
+            # Send ready_to_search status
+            if output.ready_to_search:
+                search_profile = None
+                if output.search_profile:
+                    search_profile = output.search_profile.model_dump()
+                yield sse_event(
+                    "ready_to_search",
+                    {"ready": True, "search_profile": search_profile},
+                )
+
+        yield sse_event("done", {})
+
+    except Exception as e:
+        yield sse_event("error", {"message": str(e)})
+        yield sse_event("done", {})
 
 
 @app.get("/")
 def root():
+    """Health check endpoint."""
     return {"status": "ok"}
 
 
 @app.post("/api/chat")
 def chat(request: ChatRequest):
+    """Non-streaming chat endpoint (legacy)."""
     client = get_openai_client()
     try:
-        user_message = request.message
         response = client.chat.completions.create(
-            model="gpt-5",
+            model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a supportive mental coach."},
-                {"role": "user", "content": user_message}
-            ]
+                {
+                    "role": "system",
+                    "content": "You are a friendly event discovery assistant.",
+                },
+                {"role": "user", "content": request.message},
+            ],
         )
         return {"reply": response.choices[0].message.content}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error calling OpenAI API: {str(e)}")
-
-
-def generate_stream(session_id: str, message: str):
-    """Generator for SSE stream from OpenAI."""
-    try:
-        client = get_openai_client()
-        stream = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful event discovery assistant for Calendar Club. "
-                        "Help users find local events based on their interests, "
-                        "preferred times, and location. Be concise and friendly."
-                    ),
-                },
-                {"role": "user", "content": message},
-            ],
-            stream=True,
-        )
-
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                data = {
-                    "type": "content",
-                    "content": chunk.choices[0].delta.content,
-                    "session_id": session_id,
-                }
-                yield f"data: {json.dumps(data)}\n\n"
-
-        # Send completion signal
-        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
-
-    except Exception as e:
-        error_data = {"type": "error", "error": str(e), "session_id": session_id}
-        yield f"data: {json.dumps(error_data)}\n\n"
+        raise HTTPException(
+            status_code=500, detail=f"Error calling OpenAI API: {str(e)}"
+        ) from e
 
 
 @app.post("/api/chat/stream")
-def chat_stream(request: ChatStreamRequest):
-    """SSE streaming endpoint for chat."""
+async def chat_stream(request: ChatStreamRequest):
+    """Streaming chat endpoint using Server-Sent Events with LLM-orchestrated quick picks."""
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
 
     return StreamingResponse(
-        generate_stream(request.session_id, request.message),
+        stream_chat_response(request.message, request.history),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
