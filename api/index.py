@@ -59,8 +59,10 @@ class ChatStreamRequest(BaseModel):
 
 
 def sse_event(event_type: str, data: dict) -> str:
-    """Format a Server-Sent Event."""
-    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+    """Format a Server-Sent Event with type included in payload."""
+    # Include type in the JSON payload so frontend can access it
+    payload = {"type": event_type, **data}
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 async def stream_chat_response(
