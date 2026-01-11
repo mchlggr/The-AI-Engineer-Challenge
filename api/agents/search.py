@@ -15,6 +15,7 @@ from agents import Agent, function_tool
 from api.config import get_settings
 from api.models import EventFeedback, SearchProfile
 from api.services import get_eventbrite_client
+from api.services.event_cache import CachedEvent, get_event_cache
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,9 @@ class SearchResult(BaseModel):
     """Result from search_events tool."""
 
     events: list[EventResult]
-    source: str = Field(description="Data source: 'eventbrite' or 'unavailable'")
+    source: str = Field(
+        description="Data source(s): 'luma', 'eventbrite', 'luma+eventbrite', or 'unavailable'"
+    )
     message: str | None = Field(
         default=None, description="User-facing message about data source"
     )
@@ -121,9 +124,78 @@ async def _fetch_eventbrite_events(profile: SearchProfile) -> list[EventResult]:
     return results
 
 
+def _cached_event_to_result(event: CachedEvent) -> EventResult:
+    """Convert a CachedEvent to EventResult format."""
+    return EventResult(
+        id=event.id,
+        title=event.title,
+        date=event.start_time.isoformat() if event.start_time else "",
+        location=event.location or "TBD",
+        category=event.category,
+        description=event.description[:200] if event.description else "",
+        is_free=event.is_free,
+        price_amount=event.price_amount,
+        distance_miles=5.0,  # Cache doesn't store distance
+        url=event.url,
+    )
+
+
+def _fetch_cached_events(
+    profile: SearchProfile,
+    sources: list[str] | None = None,
+) -> list[EventResult]:
+    """Fetch events from the cache.
+
+    Args:
+        profile: Search profile with filters
+        sources: Event sources to include (e.g., ["luma", "eventbrite"])
+                 If None, fetches from all cached sources.
+
+    Returns:
+        List of EventResult from cache
+    """
+    cache = get_event_cache()
+
+    # Parse time window from profile
+    start_after: datetime | None = None
+    start_before: datetime | None = None
+    if profile.time_window:
+        start_value = profile.time_window.start
+        end_value = profile.time_window.end
+        if isinstance(start_value, str):
+            start_after = datetime.fromisoformat(start_value)
+        else:
+            start_after = start_value
+        if isinstance(end_value, str):
+            start_before = datetime.fromisoformat(end_value)
+        else:
+            start_before = end_value
+
+    # Search the cache
+    cached_events = cache.search(
+        sources=sources,
+        start_after=start_after,
+        start_before=start_before,
+        limit=20,
+    )
+
+    # Filter by free_only if specified
+    if profile.free_only:
+        cached_events = [e for e in cached_events if e.is_free]
+
+    # Convert to EventResult
+    return [_cached_event_to_result(e) for e in cached_events]
+
+
 async def search_events(profile: SearchProfile) -> SearchResult:
     """
-    Search for events matching the profile.
+    Search for events matching the profile from multiple sources.
+
+    Fetches from:
+    1. Event cache (Luma and other scraped events)
+    2. Eventbrite API (if configured)
+
+    Results are merged and deduplicated.
 
     Args:
         profile: SearchProfile with location, date_window, categories, constraints
@@ -132,37 +204,63 @@ async def search_events(profile: SearchProfile) -> SearchResult:
         SearchResult with events list and source attribution
     """
     settings = get_settings()
+    all_events: list[EventResult] = []
+    sources_used: list[str] = []
 
-    # Check for API key
-    if not settings.eventbrite_api_key:
-        logger.warning("EVENTBRITE_API_KEY not configured")
+    # 1. Fetch from event cache (Luma, etc.)
+    try:
+        cached_events = _fetch_cached_events(profile, sources=["luma"])
+        if cached_events:
+            logger.info("Cache returned %s Luma events", len(cached_events))
+            all_events.extend(cached_events)
+            sources_used.append("luma")
+    except Exception as e:
+        logger.warning("Error fetching cached events: %s", e)
+
+    # 2. Fetch from Eventbrite API
+    if settings.eventbrite_api_key:
+        try:
+            eventbrite_events = await _fetch_eventbrite_events(profile)
+            if eventbrite_events:
+                logger.info("Eventbrite returned %s events", len(eventbrite_events))
+                all_events.extend(eventbrite_events)
+                sources_used.append("eventbrite")
+        except Exception as e:
+            logger.error("Eventbrite API error: %s", e, exc_info=True)
+
+    # Determine source attribution
+    if not sources_used:
+        logger.warning("No event sources available")
         return SearchResult(
             events=[],
             source="unavailable",
             message="Event search is not currently available.",
         )
 
-    try:
-        events = await _fetch_eventbrite_events(profile)
+    # Deduplicate by title (simple dedup - could be improved)
+    seen_titles: set[str] = set()
+    unique_events: list[EventResult] = []
+    for event in all_events:
+        title_key = event.title.lower().strip()
+        if title_key not in seen_titles:
+            seen_titles.add(title_key)
+            unique_events.append(event)
 
-        if events:
-            logger.info("Eventbrite returned %s events", len(events))
-            return SearchResult(events=events, source="eventbrite", message=None)
+    # Sort by date
+    unique_events.sort(key=lambda e: e.date if e.date else "")
 
-        logger.info("Eventbrite returned no events for query")
-        return SearchResult(
-            events=[],
-            source="eventbrite",
-            message="No events found matching your criteria. Try broadening your search.",
-        )
+    # Limit to reasonable number
+    unique_events = unique_events[:15]
 
-    except Exception as e:
-        logger.error("Eventbrite API error: %s", e, exc_info=True)
-        return SearchResult(
-            events=[],
-            source="unavailable",
-            message="Event search encountered an error. Please try again.",
-        )
+    if unique_events:
+        source_str = "+".join(sources_used) if len(sources_used) > 1 else sources_used[0]
+        return SearchResult(events=unique_events, source=source_str, message=None)
+
+    return SearchResult(
+        events=[],
+        source=sources_used[0] if sources_used else "unavailable",
+        message="No events found matching your criteria. Try broadening your search.",
+    )
 
 
 def refine_results(input_data: RefinementInput) -> RefinementOutput:
@@ -235,7 +333,8 @@ You're a helpful events concierge. Present results clearly and learn from user p
 
 1. **Source Attribution**: Always check the `source` field from search results:
    - If source is "unavailable": Say "I'm sorry, event search isn't available right now. Please try again later."
-   - If source is "eventbrite": Present events normally without qualification.
+   - If source contains "luma", "eventbrite", or both (e.g., "luma+eventbrite"): Present events normally.
+   - Events come from multiple sources (Luma, Eventbrite, etc.) and are merged together.
 
 2. **Zero Results**: If the events list is empty:
    - DO NOT invent events
