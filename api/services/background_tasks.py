@@ -7,6 +7,7 @@ when complete.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 
 from api.models import SearchProfile
@@ -115,9 +116,22 @@ class BackgroundTaskManager:
         sse_manager = get_sse_manager()
         polls = 0
 
+        logger.debug(
+            "🚀 [Background] Webset polling started | session=%s webset=%s",
+            task_info.session_id,
+            task_info.webset_id,
+        )
+        poll_start = time.perf_counter()
+
         try:
             while polls < WEBSET_MAX_POLLS:
                 polls += 1
+                logger.debug(
+                    "⏳ [Background] Polling | webset=%s poll=%d/%d",
+                    task_info.webset_id,
+                    polls,
+                    WEBSET_MAX_POLLS,
+                )
                 await asyncio.sleep(WEBSET_POLL_INTERVAL)
 
                 # Check if session is still connected
@@ -141,6 +155,7 @@ class BackgroundTaskManager:
                 )
 
                 if webset.status == "completed":
+                    poll_elapsed = time.perf_counter() - poll_start
                     if webset.results:
                         # Convert to event format
                         events_data = [
@@ -165,19 +180,27 @@ class BackgroundTaskManager:
                             },
                         )
 
-                        logger.info(
-                            "Pushed %d Webset events to session %s",
-                            len(events_data),
+                        logger.debug(
+                            "🎉 [Background] Webset complete | session=%s events=%d duration=%.2fs",
                             task_info.session_id,
+                            len(events_data),
+                            poll_elapsed,
                         )
                     else:
-                        logger.info(
-                            "Webset %s completed with no results",
-                            task_info.webset_id,
+                        logger.debug(
+                            "📭 [Background] Webset empty | session=%s duration=%.2fs",
+                            task_info.session_id,
+                            poll_elapsed,
                         )
                     return
 
                 elif webset.status == "failed":
+                    poll_elapsed = time.perf_counter() - poll_start
+                    logger.debug(
+                        "❌ [Background] Webset failed | session=%s duration=%.2fs",
+                        task_info.session_id,
+                        poll_elapsed,
+                    )
                     logger.warning(
                         "Webset %s failed for session %s",
                         task_info.webset_id,
@@ -186,10 +209,12 @@ class BackgroundTaskManager:
                     return
 
             # Max polls reached
-            logger.warning(
-                "Webset %s polling timeout for session %s",
-                task_info.webset_id,
+            poll_elapsed = time.perf_counter() - poll_start
+            logger.debug(
+                "⚠️ [Background] Polling timeout | session=%s polls=%d duration=%.2fs",
                 task_info.session_id,
+                polls,
+                poll_elapsed,
             )
 
         except asyncio.CancelledError:

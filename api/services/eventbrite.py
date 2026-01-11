@@ -16,6 +16,7 @@ Current approach:
 
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -197,19 +198,29 @@ class EventbriteClient:
         try:
             # Try the destination events endpoint
             endpoint = f"/destination/events/{location_slug}/"
-            logger.info("Trying Eventbrite destination API: %s", endpoint)
+            logger.debug(
+                "🌐 [Eventbrite] Starting search | endpoint=%s location=%s",
+                endpoint,
+                location or "Columbus--OH",
+            )
+            start_time = time.perf_counter()
 
             response = await client.get(endpoint, params=params)
 
             if response.status_code == 404:
                 # Try alternative endpoint format
-                logger.info("Destination API 404, trying search endpoint")
+                logger.debug("⚠️ [Eventbrite] 404 on destination API, trying search endpoint")
                 response = await client.get(
                     "/destination/search/",
                     params={**params, "q": location or "tech events"},
                 )
 
             if response.status_code == 404:
+                elapsed = time.perf_counter() - start_time
+                logger.debug(
+                    "❌ [Eventbrite] API unavailable (404) | duration=%.2fs",
+                    elapsed,
+                )
                 logger.warning(
                     "Eventbrite destination API not available (404). "
                     "The internal API may have changed."
@@ -226,10 +237,27 @@ class EventbriteClient:
                 if event:
                     events.append(event)
 
-            logger.info("Destination API returned %d events", len(events))
+            elapsed = time.perf_counter() - start_time
+            if events:
+                logger.debug(
+                    "✅ [Eventbrite] Complete | events=%d duration=%.2fs",
+                    len(events),
+                    elapsed,
+                )
+            else:
+                logger.debug(
+                    "📭 [Eventbrite] No events found | duration=%.2fs",
+                    elapsed,
+                )
             return events
 
         except httpx.HTTPError as e:
+            elapsed = time.perf_counter() - start_time if 'start_time' in locals() else 0
+            logger.debug(
+                "❌ [Eventbrite] HTTP error | error=%s duration=%.2fs",
+                str(e)[:100],
+                elapsed,
+            )
             logger.warning("Eventbrite destination API error: %s", e)
             return []
 

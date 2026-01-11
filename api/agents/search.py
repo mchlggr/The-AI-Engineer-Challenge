@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import time
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -234,7 +235,19 @@ async def search_events(profile: SearchProfile) -> SearchResult:
             )
 
         # Query API sources in parallel
+        logger.debug(
+            "🔍 [Search] Starting parallel fetch | sources=%s",
+            ", ".join(source_names),
+        )
+        start_time = time.perf_counter()
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        fetch_elapsed = time.perf_counter() - start_time
+        logger.debug(
+            "📊 [Search] Parallel fetch complete | duration=%.2fs",
+            fetch_elapsed,
+        )
 
         # Collect events from successful fetches
         all_events: list[EventResult] = []
@@ -243,6 +256,11 @@ async def search_events(profile: SearchProfile) -> SearchResult:
         for i, result in enumerate(results):
             source_name = source_names[i]
             if isinstance(result, BaseException):
+                logger.debug(
+                    "❌ [Search] Source failed | source=%s error=%s",
+                    source_name,
+                    str(result)[:100],
+                )
                 logger.warning("%s fetch failed: %s", source_name, result)
             elif isinstance(result, list):
                 # Convert source-specific results to EventResult
@@ -250,7 +268,16 @@ async def search_events(profile: SearchProfile) -> SearchResult:
                 if converted:
                     all_events.extend(converted)
                     successful_sources.append(source_name)
-                    logger.info("%s returned %d events", source_name, len(converted))
+                    logger.debug(
+                        "✅ [Search] Source complete | source=%s events=%d",
+                        source_name,
+                        len(converted),
+                    )
+                else:
+                    logger.debug(
+                        "📭 [Search] Source empty | source=%s",
+                        source_name,
+                    )
 
         if not all_events:
             source = "+".join(successful_sources) if successful_sources else "unavailable"
@@ -262,11 +289,11 @@ async def search_events(profile: SearchProfile) -> SearchResult:
 
         # Deduplicate merged results
         unique_events = _deduplicate_events(all_events)
-        logger.info(
-            "Merged %d events from %s, %d after dedup",
+        logger.debug(
+            "📊 [Search] Deduplication | before=%d after=%d removed=%d",
             len(all_events),
-            "+".join(successful_sources),
             len(unique_events),
+            len(all_events) - len(unique_events),
         )
 
         # Sort by date and limit

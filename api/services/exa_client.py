@@ -7,6 +7,7 @@ Search API and Websets API.
 
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any
 
@@ -120,6 +121,13 @@ class ExaClient:
             payload["excludeDomains"] = exclude_domains
 
         try:
+            logger.debug(
+                "🌐 [Exa] Starting search | query=%s num_results=%d",
+                query[:50],
+                num_results,
+            )
+            start_time = time.perf_counter()
+
             response = await client.post("/search", json=payload)
             response.raise_for_status()
             data = response.json()
@@ -130,9 +138,27 @@ class ExaClient:
                 if result:
                     results.append(result)
 
+            elapsed = time.perf_counter() - start_time
+            if results:
+                logger.debug(
+                    "✅ [Exa] Complete | results=%d duration=%.2fs",
+                    len(results),
+                    elapsed,
+                )
+            else:
+                logger.debug(
+                    "📭 [Exa] No results | duration=%.2fs",
+                    elapsed,
+                )
             return results
 
         except httpx.HTTPError as e:
+            elapsed = time.perf_counter() - start_time if 'start_time' in locals() else 0
+            logger.debug(
+                "❌ [Exa] HTTP error | error=%s duration=%.2fs",
+                str(e)[:100],
+                elapsed,
+            )
             logger.warning("Exa search API error: %s", e)
             return []
 
@@ -216,13 +242,22 @@ class ExaClient:
             payload["criteria"] = criteria
 
         try:
+            logger.debug(
+                "🚀 [Exa] Creating Webset | query=%s count=%d",
+                query[:50],
+                count,
+            )
             response = await client.post("/websets", json=payload)
             response.raise_for_status()
             data = response.json()
 
-            return data.get("id")
+            webset_id = data.get("id")
+            if webset_id:
+                logger.debug("✅ [Exa] Webset created | id=%s", webset_id)
+            return webset_id
 
         except httpx.HTTPError as e:
+            logger.debug("❌ [Exa] Webset creation failed | error=%s", str(e)[:100])
             logger.warning("Exa create webset error: %s", e)
             return None
 
@@ -242,6 +277,7 @@ class ExaClient:
         client = await self._get_client()
 
         try:
+            logger.debug("⏳ [Exa] Polling Webset | id=%s", webset_id)
             response = await client.get(f"/websets/{webset_id}")
             response.raise_for_status()
             data = response.json()
@@ -254,14 +290,23 @@ class ExaClient:
                     if (result := self._parse_search_result(result_data))
                 ]
 
+            status = data.get("status", "unknown")
+            logger.debug(
+                "📊 [Exa] Webset status | id=%s status=%s results=%s",
+                webset_id,
+                status,
+                len(results) if results else 0,
+            )
+
             return ExaWebset(
                 id=data["id"],
-                status=data.get("status", "unknown"),
+                status=status,
                 num_results=data.get("numResults"),
                 results=results,
             )
 
         except httpx.HTTPError as e:
+            logger.debug("❌ [Exa] Webset poll failed | id=%s error=%s", webset_id, str(e)[:100])
             logger.warning("Exa get webset error: %s", e)
             return None
 

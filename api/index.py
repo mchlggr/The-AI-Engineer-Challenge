@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -18,7 +19,7 @@ from agents import Runner, SQLiteSession
 
 from api.agents import clarifying_agent
 from api.agents.search import search_events
-from api.config import get_settings
+from api.config import configure_logging, get_settings
 from api.services.background_tasks import get_background_task_manager
 from api.services.calendar import CalendarEvent, create_ics_event, create_ics_multiple
 from api.services.google_calendar import (
@@ -30,8 +31,8 @@ from api.services.sse_connections import get_sse_manager
 
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging from settings (uses LOG_LEVEL env var)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -135,14 +136,33 @@ async def stream_chat_response(
     # Register SSE connection for background event delivery
     if session_id:
         connection = await sse_manager.register(session_id)
+        logger.debug(
+            "💬 [Chat] Message received | session=%s length=%d msg=%s",
+            session_id,
+            len(message),
+            message[:50],
+        )
+    else:
+        logger.debug(
+            "💬 [Chat] Message received | session=None length=%d msg=%s",
+            len(message),
+            message[:50],
+        )
 
     try:
         # Phase 1: Run ClarifyingAgent to gather/refine preferences
-        logger.info("Running ClarifyingAgent for message: %s", message[:50])
+        logger.debug("🤔 [Clarify] Agent starting | session=%s", session_id or "None")
+        clarify_start = time.perf_counter()
         result = await Runner.run(
             clarifying_agent,
             message,
             session=session,
+        )
+        clarify_elapsed = time.perf_counter() - clarify_start
+        logger.debug(
+            "✅ [Clarify] Agent complete | duration=%.2fs ready_to_search=%s",
+            clarify_elapsed,
+            result.final_output.ready_to_search if result.final_output else False,
         )
 
         # Stream the clarifying agent's message content
@@ -164,7 +184,13 @@ async def stream_chat_response(
 
             # Phase 2: Handoff to search when ready
             if output.ready_to_search and output.search_profile:
-                logger.info("Handoff to search phase with profile: %s", output.search_profile)
+                profile = output.search_profile
+                logger.debug(
+                    "🔍 [Search] Handoff | categories=%s time_window=%s keywords=%s",
+                    profile.categories,
+                    profile.time_window,
+                    profile.keywords[:3] if profile.keywords else None,
+                )
                 yield sse_event("searching", {})
 
                 # Perform the search
@@ -185,6 +211,11 @@ async def stream_chat_response(
                         for evt in search_result.events
                     ]
                     yield sse_event("events", {"events": events_data})
+                    logger.debug(
+                        "📤 [SSE] Streaming events | session=%s count=%d",
+                        session_id or "None",
+                        len(events_data),
+                    )
 
                     # Emit a message about results from SearchAgent perspective
                     result_message = f"\n\nI found {len(search_result.events)} events for you!"
@@ -208,6 +239,10 @@ async def stream_chat_response(
                             )
                 else:
                     # No results found
+                    logger.debug(
+                        "📭 [Search] No results | session=%s",
+                        session_id or "None",
+                    )
                     no_results_msg = "\n\nI couldn't find any events matching your criteria. "
                     if search_result.message:
                         no_results_msg += search_result.message
@@ -218,6 +253,7 @@ async def stream_chat_response(
                         chunk = no_results_msg[i : i + 10]
                         yield sse_event("content", {"content": chunk})
 
+        logger.debug("✅ [SSE] Stream complete | session=%s", session_id or "None")
         yield sse_event("done", {})
 
         # Keep connection alive briefly to receive background events

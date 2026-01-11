@@ -38,7 +38,10 @@ class SSEConnectionManager:
 
             conn = SSEConnection(session_id=session_id)
             self._connections[session_id] = conn
-            logger.debug("Registered SSE connection for session: %s", session_id)
+            logger.debug(
+                "🔌 [SSE] Connection registered | session=%s",
+                session_id,
+            )
             return conn
 
     async def unregister(self, session_id: str) -> None:
@@ -47,7 +50,10 @@ class SSEConnectionManager:
             if session_id in self._connections:
                 self._connections[session_id].active = False
                 del self._connections[session_id]
-                logger.debug("Unregistered SSE connection for session: %s", session_id)
+                logger.debug(
+                    "🔌 [SSE] Connection unregistered | session=%s",
+                    session_id,
+                )
 
     async def push_event(self, session_id: str, event: dict) -> bool:
         """Push an event to a session's queue.
@@ -63,7 +69,11 @@ class SSEConnectionManager:
             conn = self._connections.get(session_id)
             if conn and conn.active:
                 await conn.queue.put(event)
-                logger.debug("Pushed event to session %s: %s", session_id, event.get("type"))
+                logger.debug(
+                    "📤 [SSE] Event pushed | session=%s type=%s",
+                    session_id,
+                    event.get("type", "unknown"),
+                )
                 return True
             return False
 

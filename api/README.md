@@ -48,6 +48,58 @@ If you encounter an "Address already in use" error, you may need to kill existin
 lsof -ti:8000 | xargs kill -9
 ```
 
+## Debug Logging
+
+The API includes emoji-prefixed debug logs for observability. These logs show:
+- External API calls (Eventbrite, Exa) with timing
+- Search orchestration and deduplication stats
+- Conversation flow and agent processing
+- Background task lifecycle
+- SSE connection management
+
+### Enabling Debug Logs
+
+Set the `LOG_LEVEL` environment variable to `DEBUG`:
+
+```bash
+LOG_LEVEL=DEBUG uv run uvicorn api.index:app --reload
+```
+
+### Example Debug Output
+
+```
+💬 [Chat] Message received | session=abc123 length=42 msg=Find tech events this weekend
+🤔 [Clarify] Agent starting | session=abc123
+✅ [Clarify] Agent complete | duration=1.23s ready_to_search=True
+🔍 [Search] Handoff | categories=['tech'] time_window=this_weekend
+🌐 [Eventbrite] Starting search | endpoint=/destination/events/Columbus--OH/
+🌐 [Exa] Starting search | query="events Columbus Ohio tech" num_results=10
+✅ [Eventbrite] Complete | events=5 duration=0.82s
+✅ [Exa] Complete | results=8 duration=1.21s
+📊 [Search] Deduplication | before=13 after=10 removed=3
+📤 [SSE] Streaming events | session=abc123 count=10
+✅ [SSE] Stream complete | session=abc123
+```
+
+### Emoji Legend
+
+| Emoji | Meaning |
+|-------|---------|
+| 💬 | User message received |
+| 🤔 | Agent processing |
+| 🔍 | Search phase |
+| 🌐 | External API call start |
+| ✅ | Success/completion |
+| ❌ | Error/failure |
+| ⚠️ | Warning (fallback, timeout) |
+| 📊 | Statistics (counts) |
+| 📤 | SSE streaming |
+| 📭 | Empty results |
+| 🚀 | Async task start |
+| ⏳ | Polling |
+| 🎉 | Async completion |
+| 🔌 | SSE connection lifecycle |
+
 ## API Endpoints
 
 ### Chat Endpoint
