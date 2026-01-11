@@ -11,6 +11,8 @@ from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
 
+from api.services.calendar import CalendarEvent, create_ics_event, create_ics_multiple
+
 load_dotenv()
 
 app = FastAPI()
@@ -56,6 +58,32 @@ class ChatStreamRequest(BaseModel):
 
     message: str
     history: list[ConversationMessage] = []
+
+
+class ExportMultipleRequest(BaseModel):
+    """Request body for exporting multiple events."""
+
+    events: list[CalendarEvent]
+
+
+def _safe_json_serialize(data: dict | list) -> str | None:
+    """Safely serialize data to JSON, returning None if not serializable."""
+    try:
+        return json.dumps(data)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_user_error(error: Exception) -> str:
+    """Format an error into a user-friendly message."""
+    error_str = str(error).lower()
+    if "api key" in error_str or "invalid" in error_str:
+        return "There's a configuration issue. Please try again later."
+    if "timeout" in error_str:
+        return "The request timed out. Please try again."
+    if "rate limit" in error_str:
+        return "The service is busy. Please try again in a moment."
+    return "Something went wrong. Please try again."
 
 
 def sse_event(event_type: str, data: dict) -> str:
@@ -136,8 +164,14 @@ async def stream_chat_response(
 
 @app.get("/")
 def root():
-    """Health check endpoint."""
+    """Root endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/health")
+def health():
+    """Health check endpoint."""
+    return {"status": "healthy"}
 
 
 @app.post("/api/chat")
@@ -178,4 +212,29 @@ async def chat_stream(request: ChatStreamRequest):
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@app.post("/api/calendar/export")
+def export_calendar(event: CalendarEvent):
+    """Export a single event as ICS file."""
+    ics_content = create_ics_event(event)
+    return StreamingResponse(
+        iter([ics_content]),
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=event.ics"},
+    )
+
+
+@app.post("/api/calendar/export-multiple")
+def export_calendar_multiple(request: ExportMultipleRequest):
+    """Export multiple events as ICS file."""
+    if not request.events:
+        raise HTTPException(status_code=400, detail="No events provided")
+
+    ics_content = create_ics_multiple(request.events)
+    return StreamingResponse(
+        iter([ics_content]),
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=events.ics"},
     )
