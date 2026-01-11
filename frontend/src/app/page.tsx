@@ -10,10 +10,6 @@ export default function Home() {
 	const router = useRouter();
 	const [discoveredEvents, setDiscoveredEvents] = useState<CalendarEvent[]>([]);
 
-	const handleSearch = (query: unknown) => {
-		console.log("Search:", query);
-	};
-
 	const handleResultsReady = (events: CalendarEvent[]) => {
 		setDiscoveredEvents(events);
 	};
@@ -39,7 +35,6 @@ export default function Home() {
 
 				{/* Discovery Chat */}
 				<DiscoveryChat
-					onSearch={handleSearch}
 					onResultsReady={handleResultsReady}
 					onViewWeek={handleViewWeek}
 				/>

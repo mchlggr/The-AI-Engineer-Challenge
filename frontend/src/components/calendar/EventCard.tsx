@@ -37,6 +37,8 @@ export function EventCard({
 	onHover,
 	className,
 }: EventCardProps) {
+	const isClickable = Boolean(event.canonicalUrl);
+
 	const handleClick = () => {
 		onClick?.(event);
 		if (event.canonicalUrl) {
@@ -44,19 +46,8 @@ export function EventCard({
 		}
 	};
 
-	return (
-		<button
-			type="button"
-			className={cn(
-				"group w-full cursor-pointer rounded-lg border border-border-light bg-bg-white p-2 text-left shadow-sm transition-all",
-				"hover:-translate-y-0.5 hover:shadow-md",
-				categoryStyles[event.category],
-				className,
-			)}
-			onClick={handleClick}
-			onMouseEnter={(e) => onHover?.(event, e.currentTarget)}
-			onMouseLeave={() => onHover?.(null)}
-		>
+	const content = (
+		<>
 			{/* Category badge for meetups */}
 			{event.category === "meetup" && (
 				<span
@@ -78,6 +69,40 @@ export function EventCard({
 			<h3 className="mt-0.5 line-clamp-2 text-[13px] font-medium text-text-primary">
 				{event.title}
 			</h3>
+		</>
+	);
+
+	const commonClassName = cn(
+		"group w-full rounded-lg border border-border-light bg-bg-white p-2 text-left shadow-sm transition-all",
+		categoryStyles[event.category],
+		className,
+	);
+
+	if (!isClickable) {
+		return (
+			<article
+				className={cn(commonClassName, "cursor-default")}
+				onMouseEnter={(e) => onHover?.(event, e.currentTarget)}
+				onMouseLeave={() => onHover?.(null)}
+			>
+				{content}
+			</article>
+		);
+	}
+
+	return (
+		<button
+			type="button"
+			className={cn(
+				commonClassName,
+				"cursor-pointer",
+				"hover:-translate-y-0.5 hover:shadow-md",
+			)}
+			onClick={handleClick}
+			onMouseEnter={(e) => onHover?.(event, e.currentTarget)}
+			onMouseLeave={() => onHover?.(null)}
+		>
+			{content}
 		</button>
 	);
 }

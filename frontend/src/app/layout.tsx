@@ -12,7 +12,6 @@ import { Footer } from "@/components/layout/Footer";
 import { Header } from "@/components/layout/Header";
 import { PostHogProvider } from "@/components/PostHogProvider";
 import { TelemetryProvider } from "@/components/TelemetryProvider";
-import { QueryProvider } from "@/lib/query-provider";
 
 const inter = Inter({
 	variable: "--font-inter",
@@ -43,9 +42,9 @@ const tiltWarp = Tilt_Warp({
 });
 
 export const metadata: Metadata = {
-	title: "Calendar Club | Discover Local Tech Events",
+	title: "Calendar Club",
 	description:
-		"Discover in-peron event and download a calendar file for your week.",
+		"Discover in-person events and download a calendar file for your week.",
 };
 
 export default function RootLayout({
@@ -61,11 +60,9 @@ export default function RootLayout({
 				<Suspense fallback={null}>
 					<PostHogProvider>
 						<TelemetryProvider>
-							<QueryProvider>
-								<Header />
-								<main>{children}</main>
-								<Footer />
-							</QueryProvider>
+							<Header />
+							<main>{children}</main>
+							<Footer />
 						</TelemetryProvider>
 					</PostHogProvider>
 				</Suspense>

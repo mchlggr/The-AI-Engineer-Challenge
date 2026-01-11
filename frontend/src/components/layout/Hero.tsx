@@ -18,6 +18,11 @@ export function Hero({ className }: HeroProps) {
 					<span className="hero-emphasis block">the signal.</span>
 				</h1>
 			</div>
+
+			<p className="cc-body text-text-secondary">
+				Describe what you&apos;re looking for. Calendar Club finds upcoming tech
+				events and lets you download a calendar file for the week.
+			</p>
 		</div>
 	);
 }

@@ -70,6 +70,9 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# Local session DBs
+api/conversations.db*
+
 # Scrapy stuff:
 .scrapy
 

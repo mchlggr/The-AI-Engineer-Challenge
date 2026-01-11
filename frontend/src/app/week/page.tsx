@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { type CalendarEvent, WeekView } from "@/components/calendar";
 
@@ -52,16 +53,6 @@ export default function WeekPage() {
 		setWeekStart(next);
 	};
 
-	const handleEventClick = (event: CalendarEvent) => {
-		console.log("Event clicked:", event.id);
-	};
-
-	const handleEventHover = (event: CalendarEvent | null) => {
-		if (event) {
-			console.log("Event hover:", event.id);
-		}
-	};
-
 	return (
 		<div className="min-h-screen px-6 py-8 md:px-12">
 			<div className="mx-auto max-w-6xl">
@@ -95,15 +86,21 @@ export default function WeekPage() {
 				<WeekView
 					events={events}
 					weekStart={weekStart}
-					onEventClick={handleEventClick}
-					onEventHover={handleEventHover}
+					onEventClick={() => {}}
 				/>
 
 				{/* Empty state */}
 				{events.length === 0 && (
 					<div className="mt-8 text-center">
 						<p className="text-text-secondary">
-							No events yet. Use the discovery chat to find events!
+							No events yet.{" "}
+							<Link
+								href="/"
+								className="underline decoration-border-light underline-offset-4 hover:decoration-text-secondary"
+							>
+								Go back to Discover
+							</Link>{" "}
+							to search.
 						</p>
 					</div>
 				)}

@@ -48,6 +48,7 @@ export function ResultsPreview({
 	className,
 }: ResultsPreviewProps) {
 	const [isExporting, setIsExporting] = useState(false);
+	const [exportError, setExportError] = useState<string | null>(null);
 	const displayEvents = events.slice(0, 5);
 
 	const handleEventClick = (event: CalendarEvent) => {
@@ -66,17 +67,15 @@ export function ResultsPreview({
 	const handleExportAll = async () => {
 		if (events.length === 0) return;
 		setIsExporting(true);
+		setExportError(null);
 		try {
-			// Map CalendarEvent from calendar component to api CalendarEvent type
 			await api.exportEvents(
 				events.map((e) => ({
-					id: e.id,
 					title: e.title,
-					startTime: e.startTime,
-					endTime: e.endTime,
+					start: e.startTime.toISOString(),
+					end: e.endTime?.toISOString(),
 					location: e.venue,
-					source: e.sourceId,
-					sourceUrl: e.canonicalUrl,
+					url: e.canonicalUrl || undefined,
 				})),
 			);
 			// Track successful export
@@ -86,6 +85,7 @@ export function ResultsPreview({
 			});
 		} catch (error) {
 			console.error("Export failed:", error);
+			setExportError("Couldn't generate a calendar file. Please try again.");
 		} finally {
 			setIsExporting(false);
 		}
@@ -93,46 +93,53 @@ export function ResultsPreview({
 
 	return (
 		<div className={cn("flex flex-col gap-4", className)}>
-			{/* Agent message */}
-			<div className="flex items-start gap-3">
-				<div className="cc-avatar shrink-0">
-					<span className="cc-avatar-text">CC</span>
-				</div>
-				<div className="cc-bubble cc-bubble-agent">
-					<p className="cc-body font-medium">
-						I found {totalCount} events that match...
-					</p>
-				</div>
-			</div>
-
 			{/* Compact event cards */}
-			<div className="ml-11 flex flex-col gap-2">
-				{displayEvents.map((event) => (
-					<button
-						key={event.id}
-						type="button"
-						onClick={() => handleEventClick(event)}
-						className="paper-card flex items-center gap-3 p-3 text-left transition-colors hover:bg-bg-cream"
-					>
-						{/* Category indicator */}
-						<div
-							className={cn(
-								"h-10 w-1 shrink-0 rounded-full",
-								categoryColors[event.category],
-							)}
-						/>
+			<div className="flex flex-col gap-2">
+				{displayEvents.map((event) => {
+					const cardContent = (
+						<>
+							{/* Category indicator */}
+							<div
+								className={cn(
+									"h-10 w-1 shrink-0 rounded-full",
+									categoryColors[event.category],
+								)}
+							/>
 
-						{/* Event info */}
-						<div className="min-w-0 flex-1">
-							<h4 className="truncate cc-body font-medium">{event.title}</h4>
-							<p className="cc-body-sm text-text-secondary">
-								{formatEventDate(event.startTime)} at{" "}
-								{formatEventTime(event.startTime)}
-								{event.venue && ` · ${event.venue}`}
-							</p>
-						</div>
-					</button>
-				))}
+							{/* Event info */}
+							<div className="min-w-0 flex-1">
+								<h4 className="truncate cc-body font-medium">{event.title}</h4>
+								<p className="cc-body-sm text-text-secondary">
+									{formatEventDate(event.startTime)} at{" "}
+									{formatEventTime(event.startTime)}
+									{event.venue && ` · ${event.venue}`}
+								</p>
+							</div>
+						</>
+					);
+
+					if (!event.canonicalUrl) {
+						return (
+							<div
+								key={event.id}
+								className="paper-card flex items-center gap-3 p-3 text-left"
+							>
+								{cardContent}
+							</div>
+						);
+					}
+
+					return (
+						<button
+							key={event.id}
+							type="button"
+							onClick={() => handleEventClick(event)}
+							className="paper-card flex items-center gap-3 p-3 text-left transition-colors hover:bg-bg-cream"
+						>
+							{cardContent}
+						</button>
+					);
+				})}
 
 				{totalCount > 5 && (
 					<p className="cc-body-sm text-text-secondary">
@@ -142,7 +149,7 @@ export function ResultsPreview({
 			</div>
 
 			{/* Action buttons */}
-			<div className="ml-11 flex flex-wrap gap-3">
+			<div className="flex flex-wrap gap-3">
 				<button
 					type="button"
 					onClick={onViewWeek}
@@ -157,9 +164,15 @@ export function ResultsPreview({
 					className="flex items-center gap-2 rounded-lg border border-border-light bg-bg-white px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-cream disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					<Download className="h-4 w-4" />
-					{isExporting ? "Exporting..." : "Add all to calendar"}
+					{isExporting ? "Exporting..." : "Download .ics"}
 				</button>
 			</div>
+
+			{exportError && (
+				<p className="text-sm text-text-secondary" role="alert">
+					{exportError}
+				</p>
+			)}
 		</div>
 	);
 }

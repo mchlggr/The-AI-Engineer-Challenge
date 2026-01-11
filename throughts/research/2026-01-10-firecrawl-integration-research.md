@@ -5,10 +5,11 @@ git_commit: c3b34ff72c86592ac018a3ef2d5ed72c23964039
 branch: main
 repository: mchlggr/calendar-club-prototype
 topic: "Firecrawl Integration for Multi-Source Event Scraping"
-tags: [research, codebase, firecrawl, scraping, events, eventbrite, meetup, luma, posh]
+tags: [research, codebase, firecrawl, scraping, events, eventbrite, meetup, luma, posh, caching, deduplication, sql]
 status: complete
-last_updated: 2026-01-10
+last_updated: 2026-01-11
 last_updated_by: Claude
+last_updated_note: "Added platform prioritization, SQL caching strategy, and deduplication design"
 ---
 
 # Research: Firecrawl Integration for Multi-Source Event Scraping
@@ -413,3 +414,403 @@ User Query → Chat Endpoint → Search Agent → Event Aggregator
 - [Meetup GraphQL API](https://www.meetup.com/graphql/guide/)
 - [Luma API](https://help.luma.com/p/luma-api)
 - [Posh Webhooks](https://university.posh.vip/university/post/a-guide-to-webhooks-at-posh)
+
+---
+
+## Follow-up Research 2026-01-11: Platform Prioritization, Caching, and Deduplication
+
+### Platform Prioritization for Firecrawl
+
+**Principle**: Use Firecrawl only for platforms **without accessible official APIs**. Official APIs provide structured data, are more reliable, and respect platform ToS.
+
+| Platform | Has Official API? | Firecrawl Priority | Reasoning |
+|----------|------------------|-------------------|-----------|
+| **Luma** | Yes, but **paid** (Luma Plus required) | **HIGH** | API gated behind subscription; scraping public pages is free alternative |
+| **Posh** | Webhooks only (push, not poll) | **HIGH** | No discovery API; webhooks require events to already exist |
+| **Venue calendars** | No | **HIGH** | Long-tail local events; wildly varying markup |
+| **Local media calendars** | No | **MEDIUM** | Alt-weeklies, city mags with event listings |
+| **Meetup** | Yes (GraphQL, Feb 2025) | **LOW** | Use official API; Firecrawl only as enrichment fallback |
+| **Eventbrite** | Yes (REST) | **SKIP** | Already integrated; ToS prohibits scraping |
+
+**Implementation Order**:
+1. **Luma** - High value, consistent page structure (`lu.ma/*`)
+2. **Posh** - High value for nightlife/social events (`posh.vip/e/*`)
+3. **Venue calendars** - Use Firecrawl `/map` + `/scrape` for discovery
+
+### SQL Caching Strategy (Exa-Compatible)
+
+The Exa integration uses async Websets with verification—results arrive asynchronously and need caching. The caching strategy must support both Firecrawl (immediate) and Exa (async) patterns.
+
+#### Unified Events Cache Schema
+
+```sql
+-- Core events table (normalized from all sources)
+CREATE TABLE events (
+    id TEXT PRIMARY KEY,                    -- Internal UUID
+    dedupe_key TEXT NOT NULL UNIQUE,        -- Composite dedup key (see below)
+
+    -- Event data
+    title TEXT NOT NULL,
+    title_normalized TEXT NOT NULL,         -- Lowercase, stripped for dedup
+    description TEXT,
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_time TIMESTAMP WITH TIME ZONE,
+    timezone TEXT,                          -- IANA timezone
+
+    -- Location
+    venue_name TEXT,
+    venue_name_normalized TEXT,             -- For dedup matching
+    venue_address TEXT,
+    city TEXT,
+    city_normalized TEXT,                   -- For dedup matching
+    latitude REAL,
+    longitude REAL,
+
+    -- Pricing
+    is_free BOOLEAN DEFAULT TRUE,
+    price_min_cents INTEGER,
+    price_max_cents INTEGER,
+    price_currency TEXT DEFAULT 'USD',
+
+    -- Categorization
+    category TEXT DEFAULT 'community',
+    tags TEXT[],                            -- JSON array
+
+    -- Media
+    image_url TEXT,
+
+    -- URLs
+    canonical_url TEXT,
+    ticket_url TEXT,
+
+    -- Metadata
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE,    -- Cache expiry
+
+    -- Indexes for common queries
+    INDEX idx_events_start_time (start_time),
+    INDEX idx_events_city (city_normalized),
+    INDEX idx_events_dedupe (dedupe_key),
+    INDEX idx_events_expires (expires_at)
+);
+
+-- Provenance tracking (which sources contributed to this event)
+CREATE TABLE event_sources (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+
+    -- Source identification
+    source_system TEXT NOT NULL,            -- 'eventbrite', 'firecrawl:luma', 'exa:webset', etc.
+    source_url TEXT NOT NULL,
+    source_id TEXT,                         -- Original ID from source system
+
+    -- Fetch metadata
+    fetched_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    fetch_method TEXT,                      -- 'api', 'scrape', 'webset'
+    raw_data JSONB,                         -- Original response for debugging
+
+    -- Quality signals
+    is_primary BOOLEAN DEFAULT FALSE,       -- Preferred source for this event
+    confidence_score REAL,                  -- 0.0-1.0, from Exa verification or extraction confidence
+
+    UNIQUE(event_id, source_system, source_url)
+);
+
+-- Exa Webset tracking (async job management)
+CREATE TABLE exa_websets (
+    id TEXT PRIMARY KEY,                    -- Exa webset ID
+    query TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',          -- 'pending', 'processing', 'completed', 'failed'
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    items_count INTEGER DEFAULT 0,
+    error_message TEXT
+);
+
+-- Firecrawl job tracking (for async crawls)
+CREATE TABLE firecrawl_jobs (
+    id TEXT PRIMARY KEY,                    -- Firecrawl job ID
+    job_type TEXT NOT NULL,                 -- 'scrape', 'crawl', 'map'
+    target_url TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    pages_scraped INTEGER DEFAULT 0,
+    credits_used INTEGER DEFAULT 0,
+    error_message TEXT
+);
+```
+
+#### Cache Expiry Strategy
+
+| Source Type | Cache TTL | Reasoning |
+|-------------|-----------|-----------|
+| API (Eventbrite, Meetup) | 2 hours | Official APIs have rate limits; respect them |
+| Firecrawl scrape | 6 hours | Pages change less frequently |
+| Exa Webset | 24 hours | Verified results; expensive to regenerate |
+| Events within 72h | 1 hour | Near-term events need freshness |
+
+```python
+def get_cache_ttl(source_system: str, event_start: datetime) -> timedelta:
+    """Determine cache TTL based on source and event timing."""
+    hours_until_event = (event_start - datetime.now(timezone.utc)).total_seconds() / 3600
+
+    # Near-term events refresh more frequently
+    if hours_until_event < 72:
+        return timedelta(hours=1)
+
+    # Source-specific TTLs
+    ttl_map = {
+        'eventbrite': timedelta(hours=2),
+        'meetup': timedelta(hours=2),
+        'firecrawl': timedelta(hours=6),
+        'exa': timedelta(hours=24),
+    }
+
+    # Extract base source (e.g., 'firecrawl:luma' -> 'firecrawl')
+    base_source = source_system.split(':')[0]
+    return ttl_map.get(base_source, timedelta(hours=6))
+```
+
+#### Compatibility with Exa Async Pattern
+
+Exa Websets are async (minutes to hours). The caching layer handles this:
+
+```python
+# Exa workflow integration
+async def fetch_events_exa(query: str, location: str) -> list[EventResult]:
+    """Fetch events via Exa, using cache or creating new Webset."""
+
+    # Check cache first
+    cached = await get_cached_exa_results(query, location)
+    if cached and not is_expired(cached):
+        return cached.events
+
+    # Check for in-progress Webset
+    active_webset = await get_active_webset(query, location)
+    if active_webset:
+        if active_webset.status == 'completed':
+            return await process_webset_results(active_webset.id)
+        else:
+            # Return stale cache while Webset processes
+            return cached.events if cached else []
+
+    # Create new Webset (async)
+    webset_id = await create_exa_webset(query, location)
+    await db.insert('exa_websets', {
+        'id': webset_id,
+        'query': query,
+        'status': 'processing'
+    })
+
+    # Return stale cache while processing
+    return cached.events if cached else []
+```
+
+### Deduplication Strategy
+
+**Chosen Approach: Composite Key with Normalized Fields**
+
+#### Reasoning
+
+I chose composite key deduplication over fuzzy matching for the first pass because:
+
+1. **Deterministic**: Same inputs always produce same key—no threshold tuning needed
+2. **Fast**: O(1) lookup via database index on `dedupe_key`
+3. **Debuggable**: Easy to see why two events matched or didn't
+4. **Sufficient for MVP**: Catches 80%+ of duplicates across platforms
+
+**Alternative (fuzzy matching)** would be more accurate but adds complexity:
+- Requires embedding computation or trigram indexes
+- Needs threshold tuning (0.85 similarity? 0.90?)
+- Slower at query time
+- Can be added as Phase 2 enhancement
+
+#### Dedupe Key Construction
+
+```python
+import hashlib
+import re
+from datetime import datetime, timedelta
+
+def normalize_text(text: str) -> str:
+    """Normalize text for dedup comparison."""
+    if not text:
+        return ""
+    # Lowercase, remove special chars, collapse whitespace
+    normalized = text.lower()
+    normalized = re.sub(r'[^\w\s]', '', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    return normalized
+
+def normalize_venue(venue_name: str | None, city: str | None) -> str:
+    """Create normalized venue identifier."""
+    parts = []
+    if venue_name:
+        # Remove common suffixes
+        clean = re.sub(r'\b(theater|theatre|hall|center|centre|room)\b', '',
+                      normalize_text(venue_name))
+        parts.append(clean.strip())
+    if city:
+        parts.append(normalize_text(city))
+    return '_'.join(parts) if parts else 'unknown'
+
+def get_date_bucket(start_time: datetime) -> str:
+    """Bucket datetime to 90-minute windows for fuzzy time matching.
+
+    Events starting within 90 minutes of each other are considered
+    potentially the same event (accounts for timezone issues,
+    slight variations in listed start times).
+    """
+    # Round to nearest 90-minute bucket
+    bucket_minutes = 90
+    minutes_since_midnight = start_time.hour * 60 + start_time.minute
+    bucket_index = minutes_since_midnight // bucket_minutes
+
+    return f"{start_time.date().isoformat()}_{bucket_index:02d}"
+
+def compute_dedupe_key(
+    title: str,
+    start_time: datetime,
+    venue_name: str | None,
+    city: str | None
+) -> str:
+    """Compute composite deduplication key.
+
+    Key components:
+    - Normalized title (first 50 chars)
+    - Date bucket (90-minute windows)
+    - Normalized venue + city
+
+    Returns SHA-256 hash for fixed-length, index-friendly key.
+    """
+    title_norm = normalize_text(title)[:50]
+    date_bucket = get_date_bucket(start_time)
+    venue_norm = normalize_venue(venue_name, city)
+
+    composite = f"{title_norm}|{date_bucket}|{venue_norm}"
+
+    return hashlib.sha256(composite.encode()).hexdigest()[:32]
+```
+
+#### Example Dedup Matches
+
+| Event A | Event B | Match? | Reasoning |
+|---------|---------|--------|-----------|
+| "AI & ML Meetup @ Google HQ, 7pm" | "AI and ML Meetup at Google Headquarters, 7:00 PM" | **YES** | Same normalized title, same date bucket, same venue |
+| "Tech Talk: AI", Jan 15 7pm | "Tech Talk: AI", Jan 15 8pm | **YES** | Within 90-minute bucket |
+| "Tech Talk: AI", Jan 15 7pm | "Tech Talk: AI", Jan 15 10pm | **NO** | Different date buckets |
+| "Startup Grind Columbus" | "Startup Grind Cleveland" | **NO** | Different city in venue key |
+
+#### Merge Policy (When Duplicates Found)
+
+```python
+async def merge_event_sources(
+    existing_event_id: str,
+    new_source: EventSource,
+    new_data: dict
+) -> None:
+    """Merge new source data into existing event."""
+
+    # Add to provenance
+    await db.insert('event_sources', {
+        'event_id': existing_event_id,
+        'source_system': new_source.system,
+        'source_url': new_source.url,
+        'fetched_at': datetime.now(timezone.utc),
+        'raw_data': new_source.raw_data,
+        'confidence_score': new_source.confidence,
+    })
+
+    # Selective field update: prefer richer data
+    updates = {}
+    existing = await db.get('events', existing_event_id)
+
+    # Description: prefer longer
+    if new_data.get('description') and \
+       len(new_data['description']) > len(existing.get('description', '')):
+        updates['description'] = new_data['description']
+
+    # Image: prefer if missing
+    if new_data.get('image_url') and not existing.get('image_url'):
+        updates['image_url'] = new_data['image_url']
+
+    # Price: prefer explicit over unknown
+    if new_data.get('price_min_cents') and not existing.get('price_min_cents'):
+        updates['price_min_cents'] = new_data['price_min_cents']
+        updates['price_max_cents'] = new_data.get('price_max_cents')
+
+    # Location: prefer geocoded
+    if new_data.get('latitude') and not existing.get('latitude'):
+        updates['latitude'] = new_data['latitude']
+        updates['longitude'] = new_data['longitude']
+
+    if updates:
+        updates['updated_at'] = datetime.now(timezone.utc)
+        await db.update('events', existing_event_id, updates)
+```
+
+#### Source Priority for Conflicts
+
+When the same field has different values across sources:
+
+| Field | Priority Order | Reasoning |
+|-------|---------------|-----------|
+| `title` | API > Firecrawl > Exa | APIs have authoritative titles |
+| `start_time` | API > Firecrawl > Exa | APIs have exact times |
+| `description` | Longest wins | More detail is better |
+| `price` | API > Firecrawl > Exa | APIs have accurate pricing |
+| `image_url` | First non-null | Any image is better than none |
+| `venue_address` | Most complete | Geocoding needs full address |
+
+### Updated Architecture with Caching
+
+```
+User Query → Chat Endpoint → Search Agent
+                                    │
+                         ┌──────────┴──────────┐
+                         ▼                     ▼
+                   Cache Layer            Fresh Fetch
+                   (SQL query)           (if cache miss)
+                         │                     │
+                         │         ┌───────────┼───────────┐
+                         │         ▼           ▼           ▼
+                         │   Eventbrite   Firecrawl      Exa
+                         │      API        Scrape      Websets
+                         │         │           │           │
+                         │         └───────────┼───────────┘
+                         │                     ▼
+                         │              Normalize +
+                         │              Deduplicate
+                         │                     │
+                         │                     ▼
+                         │              Cache Write
+                         │                     │
+                         └─────────────────────┘
+                                    │
+                                    ▼
+                         EventResult[] (merged, deduped)
+```
+
+### Implementation Files
+
+```
+api/
+├── services/
+│   ├── eventbrite.py           # Existing
+│   ├── firecrawl.py            # NEW: Firecrawl client
+│   ├── exa.py                  # NEW: Exa client (from existing research)
+│   ├── event_cache.py          # NEW: SQL caching layer
+│   ├── dedup.py                # NEW: Deduplication logic
+│   └── scrapers/
+│       ├── __init__.py
+│       ├── luma.py             # Luma page extractor
+│       └── posh.py             # Posh page extractor
+├── models/
+│   └── events.py               # NEW: Canonical Event model
+└── db/
+    ├── __init__.py
+    ├── schema.sql              # NEW: Table definitions
+    └── migrations/             # NEW: Schema migrations
+```
