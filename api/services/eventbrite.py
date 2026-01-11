@@ -2,12 +2,23 @@
 Eventbrite API client for event discovery.
 
 Provides async methods to search and fetch events from Eventbrite.
+
+NOTE: The official Eventbrite Event Search API (/v3/events/search/) was
+deprecated in December 2019 and turned off in February 2020. This client
+attempts to use alternative endpoints, but functionality is limited.
+
+See: https://github.com/Automattic/eventbrite-api/issues/83
+
+Current approach:
+1. Try the internal destination API (used by eventbrite.com website)
+2. Fall back gracefully if unavailable
 """
 
 import logging
 import os
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
@@ -33,28 +44,54 @@ class EventbriteEvent(BaseModel):
 
 
 class EventbriteClient:
-    """Async client for Eventbrite API."""
+    """Async client for Eventbrite API.
 
-    BASE_URL = "https://www.eventbriteapi.com/v3"
+    Uses the internal destination API since the official search API was deprecated.
+    """
+
+    # The official API base URL (for authenticated endpoints)
+    API_BASE_URL = "https://www.eventbriteapi.com/v3"
+
+    # The website's internal API (used for event discovery)
+    WEB_BASE_URL = "https://www.eventbrite.com/api/v3"
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("EVENTBRITE_API_KEY")
-        self._client: httpx.AsyncClient | None = None
+        self._api_client: httpx.AsyncClient | None = None
+        self._web_client: httpx.AsyncClient | None = None
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.BASE_URL,
+    async def _get_api_client(self) -> httpx.AsyncClient:
+        """Get client for official API (authenticated endpoints)."""
+        if self._api_client is None:
+            self._api_client = httpx.AsyncClient(
+                base_url=self.API_BASE_URL,
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=30.0,
             )
-        return self._client
+        return self._api_client
+
+    async def _get_web_client(self) -> httpx.AsyncClient:
+        """Get client for website internal API (discovery endpoints)."""
+        if self._web_client is None:
+            self._web_client = httpx.AsyncClient(
+                base_url=self.WEB_BASE_URL,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                    "Accept": "application/json",
+                    "Referer": "https://www.eventbrite.com/",
+                },
+                timeout=30.0,
+            )
+        return self._web_client
 
     async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+        """Close the HTTP clients."""
+        if self._api_client:
+            await self._api_client.aclose()
+            self._api_client = None
+        if self._web_client:
+            await self._web_client.aclose()
+            self._web_client = None
 
     async def search_events(
         self,
@@ -69,7 +106,11 @@ class EventbriteClient:
         page_size: int = 10,
     ) -> list[EventbriteEvent]:
         """
-        Search for events on Eventbrite.
+        Search for events on Eventbrite using the destination API.
+
+        NOTE: The official /v3/events/search/ endpoint was deprecated in 2020.
+        This method uses Eventbrite's internal destination API which is used by
+        their website but is not officially documented or supported.
 
         Args:
             location: Location string (e.g., "Columbus, OH")
@@ -85,68 +126,193 @@ class EventbriteClient:
         Returns:
             List of EventbriteEvent objects
         """
-        if not self.api_key:
-            return []
+        # Try the destination API (internal website API)
+        events = await self._search_via_destination_api(
+            location=location,
+            start_date=start_date,
+            end_date=end_date,
+            categories=categories,
+            free_only=free_only,
+            page_size=page_size,
+        )
 
-        client = await self._get_client()
+        if events:
+            return events
+
+        logger.info("Destination API returned no events, search unavailable")
+        return []
+
+    async def _search_via_destination_api(
+        self,
+        location: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        categories: list[str] | None = None,
+        free_only: bool = False,
+        page_size: int = 10,
+    ) -> list[EventbriteEvent]:
+        """
+        Search using Eventbrite's internal destination API.
+
+        This is the API used by eventbrite.com's website for event discovery.
+        It's not officially documented but provides search functionality.
+        """
+        client = await self._get_web_client()
+
+        # Build the destination search URL
+        # Format: /destination/events/?q=<query>&place_id=<place>&dates=<dates>
+        location_slug = quote(location or "Columbus--OH") if location else "Columbus--OH"
 
         params: dict[str, Any] = {
-            "expand": "venue,ticket_availability",
             "page_size": page_size,
+            "expand": "event_sales_status,primary_venue,image,saves,ticket_availability",
         }
 
-        # Location parameters
-        if latitude and longitude:
-            params["location.latitude"] = str(latitude)
-            params["location.longitude"] = str(longitude)
-            params["location.within"] = radius
-        elif location:
-            params["location.address"] = location
-            params["location.within"] = radius
-
-        # Date range
+        # Date parameters
         if start_date:
-            params["start_date.range_start"] = start_date.strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
+            params["start_date.keyword"] = "this_week"
+            # Or use specific date range
+            params["start_date.range_start"] = start_date.strftime("%Y-%m-%dT%H:%M:%S")
         if end_date:
-            params["start_date.range_end"] = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["start_date.range_end"] = end_date.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Categories (Eventbrite uses numeric category IDs)
+        # Category filter - destination API uses different category format
         if categories:
             category_map = {
-                "ai": "102",  # Science & Technology
-                "tech": "102",
-                "startup": "101",  # Business & Professional
-                "business": "101",
-                "community": "113",  # Community & Culture
-                "networking": "101",
+                "ai": "science-and-tech",
+                "tech": "science-and-tech",
+                "startup": "business",
+                "business": "business",
+                "community": "community",
+                "networking": "business",
             }
-            cat_ids = [category_map.get(c, c) for c in categories if c in category_map]
-            if cat_ids:
-                params["categories"] = ",".join(cat_ids)
+            cat_slugs = [category_map.get(c, c) for c in categories if c in category_map]
+            if cat_slugs:
+                params["subcategories"] = ",".join(cat_slugs)
 
         # Price filter
         if free_only:
             params["price"] = "free"
 
         try:
-            response = await client.get("/events/search/", params=params)
+            # Try the destination events endpoint
+            endpoint = f"/destination/events/{location_slug}/"
+            logger.info("Trying Eventbrite destination API: %s", endpoint)
+
+            response = await client.get(endpoint, params=params)
+
+            if response.status_code == 404:
+                # Try alternative endpoint format
+                logger.info("Destination API 404, trying search endpoint")
+                response = await client.get(
+                    "/destination/search/",
+                    params={**params, "q": location or "tech events"},
+                )
+
+            if response.status_code == 404:
+                logger.warning(
+                    "Eventbrite destination API not available (404). "
+                    "The internal API may have changed."
+                )
+                return []
+
             response.raise_for_status()
             data = response.json()
 
             events = []
+            # Destination API returns events in "events" array
             for event_data in data.get("events", []):
-                event = self._parse_event(event_data)
+                event = self._parse_destination_event(event_data)
                 if event:
                     events.append(event)
 
+            logger.info("Destination API returned %d events", len(events))
             return events
 
         except httpx.HTTPError as e:
-            # Log error but don't crash - return empty list
-            logger.warning("Eventbrite API error: %s", e)
+            logger.warning("Eventbrite destination API error: %s", e)
             return []
+
+    def _parse_destination_event(self, data: dict[str, Any]) -> EventbriteEvent | None:
+        """Parse event data from the destination API format."""
+        try:
+            # Destination API has slightly different structure
+            event_data = data.get("event", data)  # May be nested or direct
+
+            # Parse dates
+            start_data = event_data.get("start", {})
+            start_str = start_data.get("utc") or start_data.get("local", "")
+            if not start_str:
+                return None
+            start_time = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+
+            end_data = event_data.get("end", {})
+            end_time = None
+            end_str = end_data.get("utc") or end_data.get("local")
+            if end_str:
+                end_time = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+
+            # Parse venue - destination API may use primary_venue
+            venue = event_data.get("primary_venue") or event_data.get("venue", {})
+            venue_name = venue.get("name")
+            venue_address = None
+            if venue.get("address"):
+                addr = venue["address"]
+                parts = [
+                    addr.get("address_1"),
+                    addr.get("city"),
+                    addr.get("region"),
+                ]
+                venue_address = ", ".join(p for p in parts if p)
+
+            # Parse pricing
+            is_free = event_data.get("is_free", True)
+            price_amount = None
+            ticket_info = event_data.get("ticket_availability", {})
+            if not is_free and ticket_info.get("minimum_ticket_price"):
+                price_data = ticket_info["minimum_ticket_price"]
+                price_amount = int(price_data.get("major_value", 0))
+
+            # Get logo/image
+            logo_url = None
+            if event_data.get("image"):
+                logo_url = event_data["image"].get("url")
+            elif event_data.get("logo"):
+                logo_url = event_data["logo"].get("url")
+
+            # Get title - destination API may use different field
+            title = (
+                event_data.get("name", {}).get("text")
+                or event_data.get("name", {}).get("html")
+                or event_data.get("title")
+                or "Untitled Event"
+            )
+
+            # Get description
+            description = (
+                event_data.get("description", {}).get("text")
+                or event_data.get("summary")
+                or ""
+            )[:500]
+
+            return EventbriteEvent(
+                id=event_data.get("id", ""),
+                title=title,
+                description=description,
+                start_time=start_time,
+                end_time=end_time,
+                venue_name=venue_name,
+                venue_address=venue_address,
+                category="community",  # Default category
+                is_free=is_free,
+                price_amount=price_amount,
+                url=event_data.get("url"),
+                logo_url=logo_url,
+            )
+
+        except (KeyError, ValueError, TypeError) as e:
+            logger.warning("Error parsing destination event: %s", e)
+            return None
 
     def _parse_event(self, data: dict[str, Any]) -> EventbriteEvent | None:
         """Parse raw Eventbrite API response into EventbriteEvent."""
