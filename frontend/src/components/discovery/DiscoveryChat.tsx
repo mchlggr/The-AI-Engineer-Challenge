@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { CalendarEvent } from "@/components/calendar";
 import {
-	type CalendarEvent as ApiCalendarEvent,
+	type DiscoveryEventWire,
 	api,
 	type ChatStreamEvent,
 	type QuickPickOption,
@@ -39,9 +39,10 @@ interface ChatMessage {
 }
 
 /**
- * Maps API CalendarEvent to component CalendarEvent type
+ * Maps API DiscoveryEventWire to component CalendarEvent type.
+ * Handles date string parsing since API sends ISO strings, not Date objects.
  */
-function mapApiEventToCalendarEvent(event: ApiCalendarEvent): CalendarEvent {
+function mapApiEventToCalendarEvent(event: DiscoveryEventWire): CalendarEvent {
 	// Map API categories to component category enum
 	const categoryMap: Record<string, CalendarEvent["category"]> = {
 		ai: "ai",
@@ -55,11 +56,17 @@ function mapApiEventToCalendarEvent(event: ApiCalendarEvent): CalendarEvent {
 	const firstCategory = event.categories?.[0]?.toLowerCase() || "meetup";
 	const category = categoryMap[firstCategory] || "meetup";
 
+	// Parse date strings to Date objects (API sends ISO strings)
+	const startTime = new Date(event.startTime);
+	const endTime = event.endTime
+		? new Date(event.endTime)
+		: new Date(startTime.getTime() + 7200000); // Default 2 hours
+
 	return {
 		id: event.id,
 		title: event.title,
-		startTime: event.startTime,
-		endTime: event.endTime || new Date(event.startTime.getTime() + 7200000), // Default 2 hours
+		startTime,
+		endTime,
 		category,
 		venue: event.location,
 		canonicalUrl: event.url || event.sourceUrl || "",

@@ -170,8 +170,12 @@ export const api = {
 						try {
 							const data = JSON.parse(line.slice(6)) as ChatStreamEvent;
 							onChunk(data);
-						} catch {
-							// Skip malformed JSON
+						} catch (e) {
+							// Only skip JSON parsing errors, re-throw other errors
+							if (e instanceof SyntaxError) {
+								continue;
+							}
+							throw e;
 						}
 					}
 				}
