@@ -8,6 +8,13 @@ from .event_cache import (
     init_event_cache,
 )
 from .eventbrite import EventbriteClient, EventbriteEvent, get_eventbrite_client
+from .firecrawl import (
+    FirecrawlClient,
+    PoshExtractor,
+    ScrapedEvent,
+    get_firecrawl_client,
+    get_posh_extractor,
+)
 from .session import SessionManager, get_session_manager, init_session_manager
 from .temporal_parser import TemporalParser, TemporalResult
 
@@ -19,9 +26,14 @@ __all__ = [
     "EventbriteClient",
     "EventbriteEvent",
     "EventCache",
+    "FirecrawlClient",
     "get_event_cache",
     "get_eventbrite_client",
+    "get_firecrawl_client",
+    "get_posh_extractor",
     "init_event_cache",
+    "PoshExtractor",
+    "ScrapedEvent",
     "SessionManager",
     "get_session_manager",
     "init_session_manager",
