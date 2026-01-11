@@ -116,7 +116,7 @@ async def stream_chat_response(
                 yield sse_event("searching", {})
 
                 # Perform the actual search
-                search_result = search_events(output.search_profile)
+                search_result = await search_events(output.search_profile)
 
                 # Convert to frontend event format and emit
                 if search_result.events:
