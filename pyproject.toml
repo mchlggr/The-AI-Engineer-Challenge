@@ -20,7 +20,12 @@ dependencies = [
     "msal>=1.31.0",
     "google-auth-oauthlib>=1.2.0",
     "google-api-python-client>=2.100.0",
+    "gql[aiohttp]>=3.5.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*"]
 
 [dependency-groups]
 dev = [
