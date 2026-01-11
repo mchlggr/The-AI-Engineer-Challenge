@@ -1,5 +1,6 @@
 """API endpoints for Calendar Club discovery chat."""
 
+import asyncio
 import json
 import logging
 import os
@@ -17,8 +18,15 @@ from agents import Runner, SQLiteSession
 
 from api.agents import clarifying_agent
 from api.agents.search import search_events
+from api.config import get_settings
+from api.services.background_tasks import get_background_task_manager
 from api.services.calendar import CalendarEvent, create_ics_event, create_ics_multiple
+from api.services.google_calendar import (
+    GoogleCalendarEvent,
+    get_google_calendar_service,
+)
 from api.services.session import get_session_manager
+from api.services.sse_connections import get_sse_manager
 
 load_dotenv()
 
@@ -109,7 +117,7 @@ def sse_event(event_type: str, data: dict) -> str:
 
 
 async def stream_chat_response(
-    message: str, session: SQLiteSession | None = None
+    message: str, session: SQLiteSession | None = None, session_id: str | None = None
 ) -> AsyncGenerator[str, None]:
     """Stream chat response with automatic handoff from clarifying to search phase.
 
@@ -117,7 +125,17 @@ async def stream_chat_response(
     1. ClarifyingAgent gathers user preferences
     2. When ready_to_search=True, handoff to search phase
     3. SearchAgent presents results and handles refinement
+    4. Background Websets discovery pushes more_events later
     """
+    sse_manager = get_sse_manager()
+    bg_manager = get_background_task_manager()
+    settings = get_settings()
+    connection = None
+
+    # Register SSE connection for background event delivery
+    if session_id:
+        connection = await sse_manager.register(session_id)
+
     try:
         # Phase 1: Run ClarifyingAgent to gather/refine preferences
         logger.info("Running ClarifyingAgent for message: %s", message[:50])
@@ -149,7 +167,7 @@ async def stream_chat_response(
                 logger.info("Handoff to search phase with profile: %s", output.search_profile)
                 yield sse_event("searching", {})
 
-                # Perform the search (async to avoid event loop issues)
+                # Perform the search
                 search_result = await search_events(output.search_profile)
 
                 # Emit search results
@@ -168,7 +186,7 @@ async def stream_chat_response(
                     ]
                     yield sse_event("events", {"events": events_data})
 
-                    # Emit a message about results
+                    # Emit a message about results from SearchAgent perspective
                     result_message = f"\n\nI found {len(search_result.events)} events for you!"
                     if search_result.source == "unavailable":
                         result_message = "\n\nEvent search is temporarily unavailable. Please try again later."
@@ -176,6 +194,18 @@ async def stream_chat_response(
                     for i in range(0, len(result_message), 10):
                         chunk = result_message[i : i + 10]
                         yield sse_event("content", {"content": chunk})
+
+                    # Start background Websets discovery if Exa is configured
+                    if session_id and settings.exa_api_key:
+                        webset_id = await bg_manager.start_webset_discovery(
+                            session_id=session_id,
+                            profile=output.search_profile,
+                        )
+                        if webset_id:
+                            yield sse_event(
+                                "background_search",
+                                {"message": "Searching for more events in the background..."},
+                            )
                 else:
                     # No results found
                     no_results_msg = "\n\nI couldn't find any events matching your criteria. "
@@ -190,10 +220,34 @@ async def stream_chat_response(
 
         yield sse_event("done", {})
 
+        # Keep connection alive briefly to receive background events
+        if connection and session_id:
+            try:
+                # Wait for background events for a short time
+                while True:
+                    try:
+                        event = await asyncio.wait_for(
+                            connection.queue.get(),
+                            timeout=0.5,
+                        )
+                        yield sse_event(event["type"], event)
+                    except asyncio.TimeoutError:
+                        # No more events, check if we should keep waiting
+                        if not connection.active:
+                            break
+                        # Small poll window, then exit
+                        break
+            except Exception as e:
+                logger.debug("Background event loop ended: %s", e)
+
     except Exception as e:
         logger.error("Error in stream_chat_response: %s", e, exc_info=True)
         yield sse_event("error", {"message": _format_user_error(e)})
         yield sse_event("done", {})
+    finally:
+        # Unregister connection
+        if session_id:
+            await sse_manager.unregister(session_id)
 
 
 @app.get("/")
@@ -264,7 +318,7 @@ async def chat_stream(request: ChatStreamRequest):
         session = session_manager.get_session(request.session_id)
 
     return StreamingResponse(
-        stream_chat_response(request.message, session),
+        stream_chat_response(request.message, session, request.session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -297,3 +351,162 @@ def export_calendar_multiple(request: ExportMultipleRequest):
         media_type="text/calendar",
         headers={"Content-Disposition": "attachment; filename=events.ics"},
     )
+
+
+# Google Calendar OAuth endpoints
+
+
+class GoogleAuthRequest(BaseModel):
+    """Request body for Google OAuth initiation."""
+
+    user_id: str
+    redirect_url: str | None = None
+
+
+class GoogleEventRequest(BaseModel):
+    """Request body for creating a Google Calendar event."""
+
+    user_id: str
+    event: GoogleCalendarEvent
+
+
+class GoogleEventsRequest(BaseModel):
+    """Request body for creating multiple Google Calendar events."""
+
+    user_id: str
+    events: list[GoogleCalendarEvent]
+
+
+@app.post("/api/google/auth")
+def google_auth_start(request: GoogleAuthRequest):
+    """Start Google OAuth flow.
+
+    Returns the authorization URL that the user should be redirected to.
+    """
+    service = get_google_calendar_service()
+
+    if not service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google Calendar integration is not configured",
+        )
+
+    try:
+        auth_url = service.get_authorization_url(
+            user_id=request.user_id,
+            redirect_url=request.redirect_url,
+        )
+        return {"authorization_url": auth_url}
+    except Exception as e:
+        logger.error("Failed to start Google OAuth: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/google/callback")
+def google_auth_callback(code: str, state: str):
+    """Handle Google OAuth callback.
+
+    Exchanges the authorization code for tokens and stores them.
+    """
+    service = get_google_calendar_service()
+
+    if not service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google Calendar integration is not configured",
+        )
+
+    try:
+        user_id, redirect_url = service.handle_oauth_callback(code=code, state=state)
+        return {
+            "success": True,
+            "user_id": user_id,
+            "redirect_url": redirect_url,
+        }
+    except Exception as e:
+        logger.error("Google OAuth callback failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/google/status/{user_id}")
+def google_auth_status(user_id: str):
+    """Check if a user has valid Google Calendar credentials."""
+    service = get_google_calendar_service()
+
+    if not service.is_configured():
+        return {
+            "configured": False,
+            "authenticated": False,
+        }
+
+    return {
+        "configured": True,
+        "authenticated": service.has_valid_credentials(user_id),
+    }
+
+
+@app.delete("/api/google/revoke/{user_id}")
+def google_auth_revoke(user_id: str):
+    """Revoke Google Calendar credentials for a user."""
+    service = get_google_calendar_service()
+    revoked = service.revoke_credentials(user_id)
+    return {"revoked": revoked}
+
+
+@app.post("/api/google/calendar/event")
+def create_google_event(request: GoogleEventRequest):
+    """Create an event in the user's Google Calendar."""
+    service = get_google_calendar_service()
+
+    if not service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google Calendar integration is not configured",
+        )
+
+    if not service.has_valid_credentials(request.user_id):
+        raise HTTPException(
+            status_code=401,
+            detail="User has not authenticated with Google Calendar",
+        )
+
+    try:
+        result = service.create_event(request.user_id, request.event)
+        return {
+            "success": True,
+            "event_id": result.get("id"),
+            "html_link": result.get("htmlLink"),
+        }
+    except Exception as e:
+        logger.error("Failed to create Google Calendar event: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/google/calendar/events")
+def create_google_events(request: GoogleEventsRequest):
+    """Create multiple events in the user's Google Calendar."""
+    service = get_google_calendar_service()
+
+    if not service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google Calendar integration is not configured",
+        )
+
+    if not service.has_valid_credentials(request.user_id):
+        raise HTTPException(
+            status_code=401,
+            detail="User has not authenticated with Google Calendar",
+        )
+
+    try:
+        results = service.create_events_batch(request.user_id, request.events)
+        return {
+            "success": True,
+            "created": len([r for r in results if "id" in r]),
+            "failed": len([r for r in results if "error" in r]),
+            "events": results,
+        }
+    except Exception as e:
+        logger.error("Failed to create Google Calendar events: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e

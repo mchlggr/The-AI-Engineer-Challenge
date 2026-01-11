@@ -53,6 +53,14 @@ export default function WeekPage() {
 		setWeekStart(next);
 	};
 
+	const handleEventClick = (_event: CalendarEvent) => {
+		// Event click handling - could open modal or navigate
+	};
+
+	const handleEventHover = (_event: CalendarEvent | null) => {
+		// Event hover handling - could show preview
+	};
+
 	return (
 		<div className="min-h-screen px-6 py-8 md:px-12">
 			<div className="mx-auto max-w-6xl">
@@ -86,7 +94,8 @@ export default function WeekPage() {
 				<WeekView
 					events={events}
 					weekStart={weekStart}
-					onEventClick={() => {}}
+					onEventClick={handleEventClick}
+					onEventHover={handleEventHover}
 				/>
 
 				{/* Empty state */}

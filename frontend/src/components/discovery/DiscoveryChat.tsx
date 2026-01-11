@@ -3,9 +3,9 @@
 import { useCallback, useRef, useState } from "react";
 import type { CalendarEvent } from "@/components/calendar";
 import {
+	type CalendarEvent as ApiCalendarEvent,
 	api,
 	type ChatStreamEvent,
-	type DiscoveryEventWire,
 	type QuickPickOption,
 } from "@/lib/api";
 import { trackChatMessage, trackEventsDiscovered } from "@/lib/posthog";
@@ -14,7 +14,18 @@ import { ChatInput } from "./ChatInput";
 import { QuickPicks } from "./QuickPicks";
 import { ResultsPreview } from "./ResultsPreview";
 
+interface SearchQuery {
+	rawText: string;
+	parsedIntent: {
+		timeWindow?: { start: Date; end: Date };
+		categories?: string[];
+		maxDistance?: number;
+		freeOnly?: boolean;
+	};
+}
+
 interface DiscoveryChatProps {
+	onSearch: (query: SearchQuery) => void;
 	onResultsReady: (events: CalendarEvent[]) => void;
 	onViewWeek: () => void;
 	initialQuery?: string;
@@ -30,7 +41,7 @@ interface ChatMessage {
 /**
  * Maps API CalendarEvent to component CalendarEvent type
  */
-function mapApiEventToCalendarEvent(event: DiscoveryEventWire): CalendarEvent {
+function mapApiEventToCalendarEvent(event: ApiCalendarEvent): CalendarEvent {
 	// Map API categories to component category enum
 	const categoryMap: Record<string, CalendarEvent["category"]> = {
 		ai: "ai",
@@ -44,22 +55,11 @@ function mapApiEventToCalendarEvent(event: DiscoveryEventWire): CalendarEvent {
 	const firstCategory = event.categories?.[0]?.toLowerCase() || "meetup";
 	const category = categoryMap[firstCategory] || "meetup";
 
-	const startTime = new Date(event.startTime);
-	if (Number.isNaN(startTime.getTime())) {
-		throw new Error("Invalid event startTime");
-	}
-
-	const endTimeRaw = event.endTime ? new Date(event.endTime) : null;
-	const endTime =
-		endTimeRaw && !Number.isNaN(endTimeRaw.getTime())
-			? endTimeRaw
-			: new Date(startTime.getTime() + 7200000); // Default 2 hours
-
 	return {
 		id: event.id,
 		title: event.title,
-		startTime,
-		endTime,
+		startTime: event.startTime,
+		endTime: event.endTime || new Date(event.startTime.getTime() + 7200000), // Default 2 hours
 		category,
 		venue: event.location,
 		canonicalUrl: event.url || event.sourceUrl || "",
@@ -68,6 +68,7 @@ function mapApiEventToCalendarEvent(event: DiscoveryEventWire): CalendarEvent {
 }
 
 export function DiscoveryChat({
+	onSearch,
 	onResultsReady,
 	onViewWeek,
 	initialQuery = "",
@@ -108,17 +109,13 @@ export function DiscoveryChat({
 				} else if (event.type === "quick_picks" && event.quick_picks) {
 					// LLM sent dynamic quick picks
 					setQuickPicks(event.quick_picks);
+				} else if (event.type === "ready_to_search") {
+					// LLM indicates it's ready to search - we can trigger search now
+					// For now, just hide quick picks and wait for results
+					setQuickPicks([]);
 				} else if (event.type === "events" && event.events) {
 					// Real events from backend - map to component type
-					const mappedEvents = event.events
-						.map((e) => {
-							try {
-								return mapApiEventToCalendarEvent(e);
-							} catch {
-								return null;
-							}
-						})
-						.filter((e): e is CalendarEvent => e !== null);
+					const mappedEvents = event.events.map(mapApiEventToCalendarEvent);
 					setPendingResults(mappedEvents);
 					onResultsReady(mappedEvents);
 					trackEventsDiscovered({
@@ -154,10 +151,7 @@ export function DiscoveryChat({
 						{
 							id: crypto.randomUUID(),
 							role: "agent",
-							content:
-								event.message ||
-								event.error ||
-								"Something went wrong. Please try again.",
+							content: `Sorry, there was an error: ${event.error}`,
 						},
 					]);
 					setStreamingMessage("");
@@ -217,14 +211,17 @@ export function DiscoveryChat({
 			// Track chat message
 			trackChatMessage({ sessionId, messageLength: input.length });
 
-			// Clear any previous results to avoid showing stale events
-			setPendingResults([]);
-			onResultsReady([]);
+			// Notify parent of search
+			const searchQuery: SearchQuery = {
+				rawText: input,
+				parsedIntent: {},
+			};
+			onSearch(searchQuery);
 
 			// Start the chat stream with full history
 			startChatStream(input, historyForApi);
 		},
-		[sessionId, startChatStream, messages, onResultsReady],
+		[sessionId, onSearch, startChatStream, messages],
 	);
 
 	// Determine if we should show results
@@ -270,7 +267,8 @@ export function DiscoveryChat({
 										fill="none"
 										viewBox="0 0 24 24"
 										stroke="currentColor"
-										aria-hidden="true"
+										role="img"
+										aria-label="Searching"
 									>
 										<path
 											strokeLinecap="round"

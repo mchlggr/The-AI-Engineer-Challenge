@@ -17,6 +17,16 @@ class Settings(BaseSettings):
 
     # Event sources
     eventbrite_api_key: str = Field(default="", description="Eventbrite API key")
+    exa_api_key: str = Field(default="", description="Exa API key for web search")
+    firecrawl_api_key: str = Field(default="", description="Firecrawl API key for web scraping")
+
+    # Google Calendar OAuth
+    google_client_id: str = Field(default="", description="Google OAuth client ID")
+    google_client_secret: str = Field(default="", description="Google OAuth client secret")
+    google_redirect_uri: str = Field(
+        default="http://localhost:3000/auth/google/callback",
+        description="Google OAuth redirect URI",
+    )
 
     # Server config
     cors_origins: str = Field(
@@ -40,7 +50,7 @@ class Settings(BaseSettings):
     @property
     def has_event_source(self) -> bool:
         """Check if any event source is configured."""
-        return bool(self.eventbrite_api_key)
+        return bool(self.eventbrite_api_key) or bool(self.exa_api_key)
 
 
 @lru_cache
