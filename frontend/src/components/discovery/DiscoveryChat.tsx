@@ -188,7 +188,7 @@ export function DiscoveryChat({
 				handleError,
 			);
 		},
-		[sessionId, onResultsReady, pendingResults.length],
+		[sessionId, onResultsReady],
 	);
 
 	// Unified handler for both text input and quick pick selection
@@ -267,6 +267,8 @@ export function DiscoveryChat({
 										fill="none"
 										viewBox="0 0 24 24"
 										stroke="currentColor"
+										role="img"
+										aria-label="Searching"
 									>
 										<path
 											strokeLinecap="round"
