@@ -1,6 +1,12 @@
 """Services for Calendar Club backend."""
 
 from .background_tasks import BackgroundTaskManager, get_background_task_manager
+from .base import (
+    EventSource,
+    EventSourceRegistry,
+    get_event_source_registry,
+    register_event_source,
+)
 from .calendar import CalendarEvent, create_ics_event, create_ics_multiple
 from .event_cache import (
     CachedEvent,
@@ -9,8 +15,19 @@ from .event_cache import (
     get_event_cache,
     init_event_cache,
 )
-from .eventbrite import EventbriteClient, EventbriteEvent, get_eventbrite_client
-from .exa_client import ExaClient, ExaSearchResult, ExaWebset, get_exa_client
+from .eventbrite import (
+    EventbriteClient,
+    EventbriteEvent,
+    get_eventbrite_client,
+    register_eventbrite_source,
+)
+from .exa_client import (
+    ExaClient,
+    ExaSearchResult,
+    ExaWebset,
+    get_exa_client,
+    register_exa_source,
+)
 from .firecrawl import (
     FirecrawlClient,
     LumaEvent,
@@ -51,10 +68,16 @@ __all__ = [
     "EventbriteClient",
     "EventbriteEvent",
     "get_eventbrite_client",
+    "register_eventbrite_source",
+    "EventSource",
+    "EventSourceRegistry",
+    "get_event_source_registry",
+    "register_event_source",
     "ExaClient",
     "ExaSearchResult",
     "ExaWebset",
     "get_exa_client",
+    "register_exa_source",
     "FirecrawlClient",
     "LumaEvent",
     "LumaExtractor",
