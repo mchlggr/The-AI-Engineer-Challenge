@@ -1,8 +1,10 @@
 """API endpoints for Calendar Club discovery chat."""
 
 import json
+import logging
 import os
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -11,9 +13,41 @@ from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
 
+from agents import Runner, SQLiteSession
+
+from api.agents import clarifying_agent
+from api.agents.search import search_events
 from api.services.calendar import CalendarEvent, create_ics_event, create_ics_multiple
+from api.services.session import get_session_manager
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def _safe_json_serialize(data: Any) -> str | None:
+    """Safely serialize data to JSON, returning None if not serializable."""
+    try:
+        return json.dumps(data)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_user_error(error: Exception) -> str:
+    """Format an exception into a user-friendly error message."""
+    error_str = str(error).lower()
+
+    if "api key" in error_str or "invalid" in error_str:
+        return "There's a configuration issue. Please try again later."
+    elif "timeout" in error_str:
+        return "The request timed out. Please try again."
+    elif "rate limit" in error_str:
+        return "We're a bit busy right now. Please try again in a moment."
+    else:
+        return "Something went wrong. Please try again."
+
 
 app = FastAPI()
 
@@ -57,6 +91,7 @@ class ChatStreamRequest(BaseModel):
     """Request body for streaming chat endpoint."""
 
     message: str
+    session_id: str | None = None
     history: list[ConversationMessage] = []
 
 
@@ -64,26 +99,6 @@ class ExportMultipleRequest(BaseModel):
     """Request body for exporting multiple events."""
 
     events: list[CalendarEvent]
-
-
-def _safe_json_serialize(data: dict | list) -> str | None:
-    """Safely serialize data to JSON, returning None if not serializable."""
-    try:
-        return json.dumps(data)
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_user_error(error: Exception) -> str:
-    """Format an error into a user-friendly message."""
-    error_str = str(error).lower()
-    if "api key" in error_str or "invalid" in error_str:
-        return "There's a configuration issue. Please try again later."
-    if "timeout" in error_str:
-        return "The request timed out. Please try again."
-    if "rate limit" in error_str:
-        return "The service is busy. Please try again in a moment."
-    return "Something went wrong. Please try again."
 
 
 def sse_event(event_type: str, data: dict) -> str:
@@ -94,32 +109,30 @@ def sse_event(event_type: str, data: dict) -> str:
 
 
 async def stream_chat_response(
-    message: str, history: list[ConversationMessage]
+    message: str, session: SQLiteSession | None = None
 ) -> AsyncGenerator[str, None]:
-    """Stream chat response using the clarifying agent."""
+    """Stream chat response with automatic handoff from clarifying to search phase.
+
+    The flow:
+    1. ClarifyingAgent gathers user preferences
+    2. When ready_to_search=True, handoff to search phase
+    3. SearchAgent presents results and handles refinement
+    """
     try:
-        from agents import Runner
-
-        from api.agents import clarifying_agent
-        from api.agents.search import search_events
-
-        # Build conversation history for the agent
-        messages = []
-        for msg in history:
-            messages.append({"role": msg.role, "content": msg.content})
-        messages.append({"role": "user", "content": message})
-
-        # Run the agent with streaming
+        # Phase 1: Run ClarifyingAgent to gather/refine preferences
+        logger.info("Running ClarifyingAgent for message: %s", message[:50])
         result = await Runner.run(
             clarifying_agent,
-            messages,
+            message,
+            session=session,
         )
 
-        # Stream the message content
+        # Stream the clarifying agent's message content
         if result.final_output:
             output = result.final_output
-            # Stream the message in chunks for responsiveness
             message_text = output.message
+
+            # Stream message in chunks for responsiveness
             for i in range(0, len(message_text), 10):
                 chunk = message_text[i : i + 10]
                 yield sse_event("content", {"content": chunk})
@@ -131,15 +144,15 @@ async def stream_chat_response(
                 ]
                 yield sse_event("quick_picks", {"quick_picks": quick_picks_data})
 
-            # If ready to search, actually perform the search
+            # Phase 2: Handoff to search when ready
             if output.ready_to_search and output.search_profile:
-                # Emit searching state so frontend can show searching UI
+                logger.info("Handoff to search phase with profile: %s", output.search_profile)
                 yield sse_event("searching", {})
 
-                # Perform the actual search
+                # Perform the search
                 search_result = search_events(output.search_profile)
 
-                # Convert to frontend event format and emit
+                # Emit search results
                 if search_result.events:
                     events_data = [
                         {
@@ -155,10 +168,33 @@ async def stream_chat_response(
                     ]
                     yield sse_event("events", {"events": events_data})
 
+                    # Emit a message about results from SearchAgent perspective
+                    result_message = f"\n\nI found {len(search_result.events)} events for you!"
+                    if search_result.source == "demo":
+                        result_message += " (These are sample events for demonstration.)"
+                    elif search_result.source == "unavailable":
+                        result_message = "\n\nEvent search is temporarily unavailable. Please try again later."
+
+                    for i in range(0, len(result_message), 10):
+                        chunk = result_message[i : i + 10]
+                        yield sse_event("content", {"content": chunk})
+                else:
+                    # No results found
+                    no_results_msg = "\n\nI couldn't find any events matching your criteria. "
+                    if search_result.message:
+                        no_results_msg += search_result.message
+                    else:
+                        no_results_msg += "Try broadening your search or changing the dates."
+
+                    for i in range(0, len(no_results_msg), 10):
+                        chunk = no_results_msg[i : i + 10]
+                        yield sse_event("content", {"content": chunk})
+
         yield sse_event("done", {})
 
     except Exception as e:
-        yield sse_event("error", {"message": str(e)})
+        logger.error("Error in stream_chat_response: %s", e, exc_info=True)
+        yield sse_event("error", {"message": _format_user_error(e)})
         yield sse_event("done", {})
 
 
@@ -198,14 +234,39 @@ def chat(request: ChatRequest):
         ) from e
 
 
+async def _error_stream(message: str) -> AsyncGenerator[str, None]:
+    """Stream an error event."""
+    yield sse_event("error", {"message": message})
+    yield sse_event("done", {})
+
+
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatStreamRequest):
     """Streaming chat endpoint using Server-Sent Events with LLM-orchestrated quick picks."""
+    # Log session_id if provided
+    if request.session_id:
+        logger.info("Chat stream request for session: %s", request.session_id)
+
+    # Handle missing API key gracefully with error event stream
     if not os.getenv("OPENAI_API_KEY"):
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
+        return StreamingResponse(
+            _error_stream("OpenAI API key not configured. Please check server configuration."),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Get session for conversation history persistence
+    session = None
+    if request.session_id:
+        session_manager = get_session_manager()
+        session = session_manager.get_session(request.session_id)
 
     return StreamingResponse(
-        stream_chat_response(request.message, request.history),
+        stream_chat_response(request.message, session),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
