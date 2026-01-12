@@ -17,7 +17,7 @@ export function PaperQuote({ className, children }: PaperQuoteProps) {
 			<p className="highlight-quote">
 				{children || (
 					<>
-						&ldquo;Deep research search for events,<br/>
+						&ldquo;Deep research for events,<br/>
 						synced to your calendar.&rdquo;
 					</>
 				)}

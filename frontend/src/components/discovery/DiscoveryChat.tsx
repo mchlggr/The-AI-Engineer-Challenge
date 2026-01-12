@@ -418,7 +418,7 @@ export function DiscoveryChat({
 				disabled={isProcessing}
 				placeholder={
 					dynamicPlaceholder ??
-					(hasResults ? "Narrow it down..." : "Search events...")
+					(hasResults ? "Narrow it down..." : "Tell me what are you looking to attend...")
 				}
 			/>
 		</div>

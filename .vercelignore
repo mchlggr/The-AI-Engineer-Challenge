@@ -28,3 +28,6 @@ internal/
 *.md
 !README.md
 frontend/.next/dev/
+
+ .venv/
+  __pycache__/
