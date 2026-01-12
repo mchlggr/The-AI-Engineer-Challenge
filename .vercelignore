@@ -1,3 +1,6 @@
+# Python version file (causes pydantic-core issues on Vercel)
+.python-version
+
 # Beads issue tracking (contains socket files)
 .beads/
 
