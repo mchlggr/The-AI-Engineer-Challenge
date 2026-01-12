@@ -21,6 +21,7 @@ dependencies = [
     "google-auth-oauthlib>=1.2.0",
     "google-api-python-client>=2.100.0",
     "gql[aiohttp]>=3.5.0",
+    "firecrawl-py>=4.12.0"
 ]
 
 [tool.setuptools.packages.find]
