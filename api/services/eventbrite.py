@@ -480,16 +480,15 @@ async def search_events_adapter(profile: Any) -> list[EventbriteEvent]:
 
 
 def register_eventbrite_source() -> None:
-    """Register Eventbrite as an event source in the global registry."""
-    from api.services.base import EventSource, register_event_source
+    """Register Eventbrite as an event source in the global registry.
 
-    api_key = os.getenv("EVENTBRITE_API_KEY", "")
-
-    source = EventSource(
-        name="eventbrite",
-        search_fn=search_events_adapter,
-        is_enabled_fn=lambda: bool(api_key),
-        priority=10,  # High priority - structured event data
-        description="Eventbrite event platform with structured event data",
+    DISABLED: Internal API endpoints no longer work (404/405 errors).
+    The official Event Search API was deprecated in December 2019.
+    TODO: Implement Firecrawl-based scraping as alternative.
+    """
+    # Don't register - the destination API endpoints are broken
+    logger.warning(
+        "Eventbrite source disabled - API endpoints deprecated. "
+        "See: https://github.com/Automattic/eventbrite-api/issues/83"
     )
-    register_event_source(source)
+    return

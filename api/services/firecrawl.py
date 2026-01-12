@@ -158,7 +158,7 @@ class FirecrawlClient:
 
         Args:
             url: The URL to scrape
-            formats: Output formats (e.g., ["markdown", "html"])
+            formats: Output formats (e.g., ["markdown", "html", "links"])
             extract_schema: JSON schema for structured extraction
 
         Returns:
@@ -166,14 +166,12 @@ class FirecrawlClient:
         """
         client = self._get_client()
 
+        # Build formats list - can contain strings or dicts for json extraction
         format_list: list[Any] = list(formats) if formats else ["markdown"]
 
-        # Add extraction format if schema provided
+        # Add JSON extraction format if schema provided
         if extract_schema:
-            format_list.append({
-                "type": "json",
-                "schema": extract_schema
-            })
+            format_list.append({"type": "json", "schema": extract_schema})
 
         try:
             result = await client.scrape(url, formats=format_list)
@@ -206,15 +204,15 @@ class FirecrawlClient:
 
         try:
             result = await client.crawl(
-                url,
+                url=url,
                 limit=limit,
                 include_paths=include_patterns,
                 exclude_paths=exclude_patterns,
             )
-            # Extract data from crawl result
-            if hasattr(result, 'data'):
-                return list(result.data)
-            return list(result) if result else []
+            # Extract data from crawl result (CrawlJob type)
+            if hasattr(result, 'data') and result.data:
+                return [dict(doc) for doc in result.data]
+            return []
         except Exception as e:
             logger.error("Firecrawl crawl error for %s: %s", url, e)
             raise
@@ -1312,19 +1310,14 @@ async def search_facebook_adapter(profile: Any) -> list[ScrapedEvent]:
 
 
 def register_facebook_source() -> None:
-    """Register Facebook as an event source."""
-    from api.services.base import EventSource, register_event_source
+    """Register Facebook as an event source.
 
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
-
-    source = EventSource(
-        name="facebook",
-        search_fn=search_facebook_adapter,
-        is_enabled_fn=lambda: bool(api_key),
-        priority=29,
-        description="Facebook events via Firecrawl scraping",
-    )
-    register_event_source(source)
+    DISABLED: Facebook scraping requires Firecrawl enterprise plan.
+    See: https://docs.firecrawl.dev/features/scrape#blocked-websites
+    """
+    # Don't register - Facebook is blocked without enterprise plan
+    logger.info("Facebook source disabled - requires Firecrawl enterprise plan")
+    return
 
 
 class RiverExtractor(BaseExtractor):

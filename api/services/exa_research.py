@@ -11,7 +11,7 @@ import os
 from typing import Any
 
 from exa_py import Exa
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from api.services.exa_client import ExaSearchResult
@@ -28,58 +28,42 @@ class ExaResearchResult(BaseModel):
     summary: str | None = None
 
 
-# Schema for structured event extraction via Exa Research
-EVENT_RESEARCH_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "events": {
-            "type": "array",
-            "description": "List of events found",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Event title",
-                    },
-                    "start_date": {
-                        "type": "string",
-                        "description": (
-                            "Date in 'Month Day, Year' format "
-                            "(e.g., 'January 15, 2026'). MUST include year."
-                        ),
-                    },
-                    "start_time": {
-                        "type": ["string", "null"],
-                        "description": "Time with AM/PM (e.g., '7:00 PM')",
-                    },
-                    "venue_name": {
-                        "type": ["string", "null"],
-                        "description": "Venue name or 'Online' for virtual events",
-                    },
-                    "venue_address": {
-                        "type": ["string", "null"],
-                        "description": "Full address with city, state",
-                    },
-                    "price": {
-                        "type": "string",
-                        "description": "'Free' or price like '$25'",
-                    },
-                    "url": {
-                        "type": "string",
-                        "description": "Event page URL",
-                    },
-                    "description": {
-                        "type": ["string", "null"],
-                        "description": "Brief event description",
-                    },
-                },
-                "required": ["title", "start_date", "url"],
-            },
-        }
-    },
-    "required": ["events"],
-}
+class ResearchEventItem(BaseModel):
+    """Single event extracted by Exa Research."""
+
+    title: str = Field(description="Event title")
+    start_date: str = Field(
+        description="Date in 'Month Day, Year' format (e.g., 'January 15, 2026'). MUST include year."
+    )
+    start_time: str | None = Field(
+        default=None,
+        description="Time with AM/PM (e.g., '7:00 PM')"
+    )
+    venue_name: str | None = Field(
+        default=None,
+        description="Venue name or 'Online' for virtual events"
+    )
+    venue_address: str | None = Field(
+        default=None,
+        description="Full address with city, state"
+    )
+    price: str = Field(
+        default="Free",
+        description="'Free' or price like '$25'"
+    )
+    url: str = Field(description="Event page URL")
+    description: str | None = Field(
+        default=None,
+        description="Brief event description"
+    )
+
+
+class ResearchEventsOutput(BaseModel):
+    """Structured output from Exa Research for events."""
+
+    events: list[ResearchEventItem] = Field(
+        description="List of events found"
+    )
 
 
 class ExaResearchClient:
@@ -105,13 +89,14 @@ class ExaResearchClient:
     def _sync_create_research_task(
         self,
         query: str,
-        output_schema: dict[str, Any] | None = None,
+        output_schema: type[BaseModel] | None = None,
     ) -> Any:
         """Synchronous research task creation."""
         client = self._get_client()
 
         kwargs: dict[str, Any] = {"instructions": query}
         if output_schema:
+            # Pass the Pydantic model class directly - Exa SDK handles conversion
             kwargs["output_schema"] = output_schema
 
         return client.research.create(**kwargs)
@@ -119,14 +104,14 @@ class ExaResearchClient:
     async def create_research_task(
         self,
         query: str,
-        output_schema: dict[str, Any] | None = None,
+        output_schema: type[BaseModel] | None = None,
     ) -> str | None:
         """
         Create a research task for deep event discovery.
 
         Args:
             query: Research question/topic
-            output_schema: Optional schema for structured output
+            output_schema: Optional Pydantic model class for structured output
 
         Returns:
             Task ID if created successfully
@@ -243,10 +228,10 @@ async def research_events_adapter(profile: Any) -> list[ExaSearchResult]:
 
     query = ". ".join(query_parts)
 
-    # Create research task WITH schema for structured output
+    # Create research task WITH Pydantic model for structured output
     task_id = await client.create_research_task(
         query,
-        output_schema=EVENT_RESEARCH_SCHEMA,
+        output_schema=ResearchEventsOutput,
     )
     if not task_id:
         return []
