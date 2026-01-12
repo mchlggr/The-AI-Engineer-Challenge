@@ -32,6 +32,7 @@ from api.services.firecrawl import (
     register_posh_source,
     register_river_source,
 )
+from api.services.firecrawl_agent import register_firecrawl_agent_source
 from api.services.calendar import CalendarEvent, create_ics_event, create_ics_multiple
 from api.services.google_calendar import (
     GoogleCalendarEvent,
@@ -56,7 +57,8 @@ logger = logging.getLogger(__name__)
 # register_meetup_scraper_source()
 # register_facebook_source()
 # register_river_source()
-register_exa_research_source()
+# register_exa_research_source()
+register_firecrawl_agent_source()
 
 
 def _format_user_error(error: Exception) -> str:

@@ -34,6 +34,11 @@ from .exa_research import (
     get_exa_research_client,
     register_exa_research_source,
 )
+from .firecrawl_agent import (
+    FirecrawlAgentClient,
+    get_firecrawl_agent_client,
+    register_firecrawl_agent_source,
+)
 from .firecrawl import (
     BaseExtractor,
     FacebookExtractor,
@@ -104,6 +109,9 @@ __all__ = [
     "ExaResearchResult",
     "get_exa_research_client",
     "register_exa_research_source",
+    "FirecrawlAgentClient",
+    "get_firecrawl_agent_client",
+    "register_firecrawl_agent_source",
     "BaseExtractor",
     "FirecrawlClient",
     "FacebookExtractor",
