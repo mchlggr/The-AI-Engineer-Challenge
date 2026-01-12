@@ -1,502 +1,101 @@
-"""
-Firecrawl-based web scraping for event discovery.
-
-Provides extensible extractors for various event platforms using Firecrawl's
-structured extraction capabilities via the official SDK.
-"""
-
-import logging
-import os
-import re
-from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Any
-from urllib.parse import urlparse
-
-from firecrawl import AsyncFirecrawl
-from pydantic import BaseModel
-
-logger = logging.getLogger(__name__)
-
-
-class ScrapedEvent(BaseModel):
-    """Event data extracted from a web page."""
-
-    source: str
-    event_id: str
-    title: str
-    description: str
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    venue_name: str | None = None
-    venue_address: str | None = None
-    category: str = "community"
-    is_free: bool = False
-    price_amount: int | None = None
-    url: str
-    logo_url: str | None = None
-    raw_data: dict[str, Any] | None = None
-
-
-class FirecrawlClient:
-    """
-    Async client wrapper for Firecrawl SDK.
-
-    Provides a thin wrapper around AsyncFirecrawl with lazy initialization
-    and consistent error handling.
-    """
-
-    def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("FIRECRAWL_API_KEY")
-        self._client: AsyncFirecrawl | None = None
-
-    def _get_client(self) -> AsyncFirecrawl:
-        """Get or create the SDK client."""
-        if self._client is None:
-            if not self.api_key:
-                raise ValueError("FIRECRAWL_API_KEY not configured")
-            self._client = AsyncFirecrawl(api_key=self.api_key)
-        return self._client
-
-    async def close(self) -> None:
-        """Close the client (no-op for SDK, kept for compatibility)."""
-        # AsyncFirecrawl doesn't have a close method, but we keep this
-        # for API compatibility
-        self._client = None
-
-    async def scrape(
-        self,
-        url: str,
-        formats: list[str] | None = None,
-        extract_schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """
-        Scrape a single URL.
-
-        Args:
-            url: The URL to scrape
-            formats: Output formats (e.g., ["markdown", "html"])
-            extract_schema: JSON schema for structured extraction
-
-        Returns:
-            Scraped content with requested formats
-        """
-        client = self._get_client()
-
-        format_list: list[Any] = list(formats) if formats else ["markdown"]
-
-        # Add extraction format if schema provided
-        if extract_schema:
-            format_list.append({
-                "type": "json",
-                "schema": extract_schema
-            })
-
-        try:
-            result = await client.scrape(url, formats=format_list)
-            # SDK returns dict-like object, normalize to dict
-            return dict(result) if result else {}
-        except Exception as e:
-            logger.error("Firecrawl scrape error for %s: %s", url, e)
-            raise
-
-    async def crawl(
-        self,
-        url: str,
-        limit: int = 10,
-        include_patterns: list[str] | None = None,
-        exclude_patterns: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Crawl a website starting from the given URL.
-
-        Args:
-            url: Starting URL
-            limit: Maximum number of pages to crawl
-            include_patterns: URL patterns to include
-            exclude_patterns: URL patterns to exclude
-
-        Returns:
-            List of scraped page data
-        """
-        client = self._get_client()
-
-        try:
-            result = await client.crawl(
-                url,
-                limit=limit,
-                include_paths=include_patterns,
-                exclude_paths=exclude_patterns,
-            )
-            # Extract data from crawl result
-            if hasattr(result, 'data'):
-                return list(result.data)
-            return list(result) if result else []
-        except Exception as e:
-            logger.error("Firecrawl crawl error for %s: %s", url, e)
-            raise
-
-
-class BaseExtractor(ABC):
-    """
-    Base class for Firecrawl-based event extractors.
-
-    Subclass this to create extractors for different event platforms.
-    Each extractor defines its own extraction schema and parsing logic.
-    """
-
-    SOURCE_NAME: str = "unknown"
-    BASE_URL: str = ""
-    EVENT_SCHEMA: dict[str, Any] = {}
-    DEFAULT_CATEGORY: str = "community"
-
-    def __init__(self, client: FirecrawlClient | None = None):
-        self.client = client or get_firecrawl_client()
-
-    async def close(self) -> None:
-        """Close the client."""
-        await self.client.close()
-
-    @abstractmethod
-    def _extract_event_id(self, url: str) -> str:
-        """Extract event ID from URL. Must be implemented by subclass."""
-        pass
-
-    @abstractmethod
-    def _parse_extracted_data(
-        self,
-        url: str,
-        extracted: dict[str, Any],
-    ) -> ScrapedEvent | None:
-        """Parse extracted data into ScrapedEvent. Must be implemented by subclass."""
-        pass
-
-    async def extract_event(self, url: str) -> ScrapedEvent | None:
-        """
-        Extract event data from a single URL.
-
-        Args:
-            url: Event page URL
-
-        Returns:
-            ScrapedEvent if extraction successful, None otherwise
-        """
-        try:
-            data = await self.client.scrape(
-                url=url,
-                formats=["extract"],
-                extract_schema=self.EVENT_SCHEMA,
-            )
-
-            extracted = data.get("extract", {})
-            if not extracted.get("title"):
-                logger.warning("No title found in %s event: %s", self.SOURCE_NAME, url)
-                return None
-
-            return self._parse_extracted_data(url, extracted)
-
-        except Exception as e:
-            logger.error("Failed to extract %s event from %s: %s", self.SOURCE_NAME, url, e)
-            return None
-
-    async def _crawl_and_extract(
-        self,
-        discovery_url: str,
-        limit: int = 20,
-        include_patterns: list[str] | None = None,
-    ) -> list[ScrapedEvent]:
-        """
-        Crawl a listing page and extract events.
-
-        This is the core discovery logic that can be called by subclasses
-        with platform-specific URLs and patterns.
-
-        Args:
-            discovery_url: URL to crawl for event links
-            limit: Maximum number of events to return
-            include_patterns: URL patterns to include (e.g., ["/e/*"])
-
-        Returns:
-            List of discovered events
-        """
-        try:
-            pages = await self.client.crawl(
-                url=discovery_url,
-                limit=limit + 5,  # Buffer for failures
-                include_patterns=include_patterns,
-            )
-
-            events = []
-            for page in pages:
-                url = page.get("url", "") if isinstance(page, dict) else getattr(page, 'url', '')
-                if not url:
-                    continue
-
-                event = await self.extract_event(url)
-                if event:
-                    events.append(event)
-                    if len(events) >= limit:
-                        break
-
-            logger.info("Discovered %d %s events", len(events), self.SOURCE_NAME)
-            return events
-
-        except Exception as e:
-            logger.error("Failed to discover %s events: %s", self.SOURCE_NAME, e)
-            return []
-
-
-class PoshExtractor(BaseExtractor):
-    """
-    Extractor for Posh (posh.vip) events.
-
-    Posh is a social events platform popular for nightlife,
-    parties, and social gatherings.
-    """
-
-    SOURCE_NAME = "posh"
-    BASE_URL = "https://posh.vip"
-    DEFAULT_CATEGORY = "nightlife"
-
-    EVENT_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string", "description": "Event title"},
-            "description": {"type": "string", "description": "Event description"},
-            "date": {"type": "string", "description": "Event date (e.g., 'Saturday, Jan 15')"},
-            "time": {"type": "string", "description": "Event time (e.g., '10 PM - 2 AM')"},
-            "venue_name": {"type": "string", "description": "Venue name"},
-            "venue_address": {"type": "string", "description": "Venue address"},
-            "price": {"type": "string", "description": "Ticket price (e.g., 'Free', '$20')"},
-            "image_url": {"type": "string", "description": "Event image URL"},
-            "organizer": {"type": "string", "description": "Event organizer name"},
-        },
-        "required": ["title"],
-    }
-
-    def _extract_event_id(self, url: str) -> str:
-        """Extract event ID from Posh URL."""
-        parsed = urlparse(url)
-        path = parsed.path.strip("/")
-        if path.startswith("e/"):
-            return path[2:]
-        return path or url
-
-    def _parse_datetime(
-        self, date_str: str | None, time_str: str | None
-    ) -> tuple[datetime | None, datetime | None]:
-        """Parse Posh date/time strings into datetime objects."""
-        if not date_str:
-            return None, None
-
-        try:
-            import dateparser
-
-            combined = date_str
-            if time_str:
-                time_parts = re.split(r"\s*[-–to]\s*", time_str, maxsplit=1)
-                start_time = time_parts[0].strip()
-                combined = f"{date_str} {start_time}"
-
-            start_dt = dateparser.parse(
-                combined,
-                settings={"PREFER_DATES_FROM": "future"},
-            )
-
-            end_dt = None
-            if time_str and ("-" in time_str or "–" in time_str or " to " in time_str.lower()):
-                time_parts = re.split(r"\s*[-–]\s*|\s+to\s+", time_str, flags=re.IGNORECASE)
-                if len(time_parts) > 1:
-                    end_time = time_parts[1].strip()
-                    end_combined = f"{date_str} {end_time}"
-                    end_dt = dateparser.parse(
-                        end_combined,
-                        settings={"PREFER_DATES_FROM": "future"},
-                    )
-
-            return start_dt, end_dt
-
-        except Exception as e:
-            logger.warning("Failed to parse datetime: %s %s - %s", date_str, time_str, e)
-            return None, None
-
-    def _parse_price(self, price_str: str | None) -> tuple[bool, int | None]:
-        """Parse price string into is_free and price_amount."""
-        if not price_str:
-            return True, None
-
-        price_lower = price_str.lower().strip()
-        if price_lower in ("free", "no cover", "complimentary", ""):
-            return True, None
-
-        match = re.search(r"\$?(\d+(?:\.\d{2})?)", price_str)
-        if match:
-            price = float(match.group(1))
-            return False, int(price * 100)
-
-        return True, None
-
-    def _parse_extracted_data(
-        self,
-        url: str,
-        extracted: dict[str, Any],
-    ) -> ScrapedEvent | None:
-        """Parse Posh extracted data into ScrapedEvent."""
-        start_dt, end_dt = self._parse_datetime(
-            extracted.get("date"),
-            extracted.get("time"),
-        )
-        is_free, price_amount = self._parse_price(extracted.get("price"))
-
-        return ScrapedEvent(
-            source=self.SOURCE_NAME,
-            event_id=self._extract_event_id(url),
-            title=extracted["title"],
-            description=extracted.get("description", ""),
-            start_time=start_dt,
-            end_time=end_dt,
-            venue_name=extracted.get("venue_name"),
-            venue_address=extracted.get("venue_address"),
-            category=self.DEFAULT_CATEGORY,
-            is_free=is_free,
-            price_amount=price_amount,
-            url=url,
-            logo_url=extracted.get("image_url"),
-            raw_data=extracted,
-        )
-
-    async def discover_events(
-        self,
-        city: str = "columbus",
-        limit: int = 20,
-    ) -> list[ScrapedEvent]:
-        """
-        Discover events from Posh for a given city.
-
-        Args:
-            city: City slug (e.g., "columbus", "new-york")
-            limit: Maximum number of events to return
-
-        Returns:
-            List of discovered events
-        """
-        from urllib.parse import urljoin
-        city_url = urljoin(self.BASE_URL, f"/c/{city}")
-
-        return await self._crawl_and_extract(
-            discovery_url=city_url,
-            limit=limit,
-            include_patterns=["/e/*"],
-        )
-
-
-# Singleton instances
-_firecrawl_client: FirecrawlClient | None = None
-_posh_extractor: PoshExtractor | None = None
-
-
-def get_firecrawl_client() -> FirecrawlClient:
-    """Get the singleton Firecrawl client."""
-    global _firecrawl_client
-    if _firecrawl_client is None:
-        _firecrawl_client = FirecrawlClient()
-    return _firecrawl_client
-
-
-def get_posh_extractor() -> PoshExtractor:
-    """Get the singleton Posh extractor."""
-    global _posh_extractor
-    if _posh_extractor is None:
-        _posh_extractor = PoshExtractor()
-    return _posh_extractor
-
-
-async def search_events_adapter(profile: Any) -> list[ScrapedEvent]:
-    """
-    Adapter for registry pattern - searches Posh using a SearchProfile.
-    """
-    import time
-
-    extractor = get_posh_extractor()
-    city = "columbus"  # TODO: Extract from profile.location
-
-    # Extract time window for logging
-    start_date = None
-    end_date = None
-    if hasattr(profile, "time_window") and profile.time_window:
-        start_date = profile.time_window.start
-        end_date = profile.time_window.end
-
-    # Log the outbound query
-    logger.debug(
-        "📤 [Posh] Outbound Query | city='%s' start=%s end=%s free_only=%s",
-        city,
-        start_date,
-        end_date,
-        getattr(profile, "free_only", False),
-    )
-
-    start_time = time.perf_counter()
-    events = await extractor.discover_events(city=city, limit=30)
-    fetch_elapsed = time.perf_counter() - start_time
-
-    logger.debug(
-        "📥 [Posh] Fetched | events=%d duration=%.2fs",
-        len(events),
-        fetch_elapsed,
-    )
-
-    # Post-fetch filtering
-    filtered_events = []
-    filtered_out_time = 0
-    filtered_out_price = 0
-
-    for event in events:
-        if hasattr(profile, "time_window") and profile.time_window:
-            if profile.time_window.start and event.start_time:
-                if event.start_time < profile.time_window.start:
-                    filtered_out_time += 1
-                    continue
-            if profile.time_window.end and event.start_time:
-                if event.start_time > profile.time_window.end:
-                    filtered_out_time += 1
-                    continue
-
-        if hasattr(profile, "free_only") and profile.free_only:
-            if not event.is_free:
-                filtered_out_price += 1
-                continue
-
-        filtered_events.append(event)
-
-    # Log filtering results
-    if filtered_out_time > 0 or filtered_out_price > 0:
-        logger.debug(
-            "🔍 [Posh] Filtered | kept=%d removed_time=%d removed_price=%d",
-            len(filtered_events),
-            filtered_out_time,
-            filtered_out_price,
-        )
-
-    return filtered_events
-
-
-def register_posh_source() -> None:
-    """Register Posh as an event source in the global registry."""
-    from api.services.base import EventSource, register_event_source
-
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
-
-    source = EventSource(
-        name="posh",
-        search_fn=search_events_adapter,
-        is_enabled_fn=lambda: bool(api_key),
-        priority=25,
-        description="Posh.vip nightlife and social events via Firecrawl scraping",
-    )
-    register_event_source(source)
+# Multi-Source Firecrawl Extractors Implementation Plan
 
+## Overview
 
+Add 5 new event source integrations using Firecrawl's hosted scraping infrastructure:
+1. **Luma** (lu.ma/luma.com)
+2. **Partiful** (partiful.com)
+3. **Meetup** (meetup.com) - via scraping
+4. **Facebook Events** (facebook.com/events)
+5. **River** (getriver.io)
+
+All extractors follow the `BaseExtractor` pattern established in `api/services/firecrawl.py`.
+
+## Current State Analysis
+
+### Existing Infrastructure
+- **BaseExtractor** abstract class at `firecrawl.py:140-247` handles common crawl/extract logic
+- **PoshExtractor** at `firecrawl.py:249-400` demonstrates the pattern
+- **FirecrawlClient** at `firecrawl.py:43-137` wraps the Firecrawl API
+- **Event Source Registry** at `base.py:48-124` enables parallel source querying
+- **MeetupClient** at `meetup.py:104-283` - complete but registration commented out
+
+### Key Discovery: Firecrawl Architecture
+Firecrawl is a **hosted service** - their infrastructure handles:
+- Headless browser rendering
+- Proxy rotation
+- Anti-bot bypass (Cloudflare, CAPTCHAs)
+- JavaScript execution
+
+This means all sources (including Facebook) can use the same simple pattern.
+
+### URL Patterns Discovered
+
+| Source | Discovery URL | Event URL |
+|--------|--------------|-----------|
+| Luma | `luma.com/{city}` | `luma.com/{slug}` |
+| Partiful | `partiful.com/discover/{city}` | `partiful.com/e/{id}` |
+| Meetup | `meetup.com/find/?location={city}` | `meetup.com/{group}/events/{id}` |
+| Facebook | `facebook.com/events/search/?q={city}` | `facebook.com/events/{id}` |
+| River | `app.getriver.io/discovery/communities` | `app.getriver.io/events/{slug}` |
+
+## Desired End State
+
+After implementation:
+1. All 6 sources registered and queryable in parallel
+2. Each source follows the `BaseExtractor` pattern
+3. Live integration tests exist for each source
+4. Search results include events from all enabled sources
+
+### Verification
+```bash
+# All tests pass
+pytest api/services/tests/ -v
+
+# Integration tests (requires API keys)
+pytest -m integration api/services/tests/test_live_sources.py -v
+
+# Type checking
+pyright api/services/
+```
+
+## What We're NOT Doing
+
+- **Official APIs** for Luma/Partiful (require paid subscriptions)
+- **Ticketmaster, Dice.fm, Bandsintown, SeatGeek** (future work)
+- **Venue calendars** (future work)
+- **Authentication flows** for any source
+- **Caching layer** for scraped results
+- **Parallel extraction within sources** (keeping sequential for now)
+
+## Implementation Approach
+
+Each new extractor follows this pattern:
+1. Create extractor class extending `BaseExtractor`
+2. Define `SOURCE_NAME`, `BASE_URL`, `EVENT_SCHEMA`
+3. Implement `_extract_event_id()` and `_parse_extracted_data()`
+4. Add `discover_events()` method with source-specific logic
+5. Create adapter function for registry
+6. Create registration function
+7. Add to `index.py` startup
+8. Add conversion function to `search.py`
+9. Add live integration tests
+
+---
+
+## Phase 1: Luma Extractor
+
+### Overview
+Create `LumaExtractor` for scraping events from luma.com city pages.
+
+### Changes Required
+
+#### 2.1 Create LumaExtractor Class
+
+**File**: `api/services/firecrawl.py`
+**Changes**: Add after PoshExtractor class (around line 400)
+
+```python
 class LumaExtractor(BaseExtractor):
     """
     Extractor for Luma (luma.com) events.
@@ -506,7 +105,7 @@ class LumaExtractor(BaseExtractor):
     """
 
     SOURCE_NAME = "luma"
-    BASE_URL = "https://lu.ma"
+    BASE_URL = "https://luma.com"
     DEFAULT_CATEGORY = "tech"
 
     # City slugs supported by Luma
@@ -687,28 +286,12 @@ def get_luma_extractor() -> LumaExtractor:
 
 async def search_luma_adapter(profile: Any) -> list[ScrapedEvent]:
     """Adapter for registry pattern - searches Luma events."""
-    import time
-
     extractor = get_luma_extractor()
 
     # TODO: Extract city from profile.location when available
     city = "sf"  # Default to SF for now
 
-    # Log the outbound query
-    logger.debug(
-        "📤 [Luma] Outbound Query | city='%s'",
-        city,
-    )
-
-    start_time = time.perf_counter()
     events = await extractor.discover_events(city=city, limit=20)
-    fetch_elapsed = time.perf_counter() - start_time
-
-    logger.debug(
-        "📥 [Luma] Fetched | events=%d duration=%.2fs",
-        len(events),
-        fetch_elapsed,
-    )
 
     # Post-filter by time window if provided
     filtered = []
@@ -732,8 +315,6 @@ async def search_luma_adapter(profile: Any) -> list[ScrapedEvent]:
 
 def register_luma_source() -> None:
     """Register Luma as an event source."""
-    from api.services.base import EventSource, register_event_source
-
     api_key = os.getenv("FIRECRAWL_API_KEY", "")
 
     source = EventSource(
@@ -744,8 +325,117 @@ def register_luma_source() -> None:
         description="Luma events via Firecrawl scraping",
     )
     register_event_source(source)
+```
+
+#### 2.2 Update Exports
+
+**File**: `api/services/__init__.py`
+**Changes**: Add Luma exports
+
+```python
+from .firecrawl import (
+    FirecrawlClient,
+    LumaEvent,
+    LumaExtractor,
+    PoshExtractor,
+    ScrapedEvent,
+    get_firecrawl_client,
+    get_luma_extractor,
+    get_posh_extractor,
+    register_luma_source,
+    register_posh_source,
+)
+```
+
+#### 2.3 Register at Startup
+
+**File**: `api/index.py`
+**Changes**: Add registration call
+
+```python
+from api.services.firecrawl import register_posh_source, register_luma_source
+
+# In registration section
+register_posh_source()
+register_luma_source()
+```
+
+#### 2.4 Add Live Tests
+
+**File**: `api/services/tests/test_live_sources.py`
+**Changes**: Add Luma test class
+
+```python
+from api.services.firecrawl import LumaExtractor
+
+@pytest.fixture
+async def luma_extractor():
+    """Create LumaExtractor with cleanup."""
+    skip_if_no_firecrawl_key()
+    extractor = LumaExtractor()
+    yield extractor
+    await extractor.close()
 
 
+@pytest.mark.integration
+class TestLumaExtractorLive:
+    """Live integration tests for LumaExtractor."""
+
+    @pytest.mark.asyncio
+    async def test_discover_events_sf(self, luma_extractor):
+        """Test discovering events for San Francisco."""
+        events = await luma_extractor.discover_events(
+            city="sf",
+            limit=5,
+        )
+
+        assert isinstance(events, list)
+        for event in events:
+            assert isinstance(event, ScrapedEvent)
+            assert event.source == "luma"
+            assert event.title
+            assert event.url
+
+    @pytest.mark.asyncio
+    async def test_discover_events_nyc(self, luma_extractor):
+        """Test discovering events for NYC."""
+        events = await luma_extractor.discover_events(
+            city="nyc",
+            limit=3,
+        )
+
+        assert isinstance(events, list)
+        for event in events:
+            assert isinstance(event, ScrapedEvent)
+```
+
+### Success Criteria
+
+#### Automated Verification:
+- [x] Type checking passes: `pyright api/services/firecrawl.py` (pre-existing issue on line 126 unrelated to this work)
+- [x] Unit tests pass: `pytest api/services/tests/ -v`
+- [ ] Integration tests pass: `pytest -m integration -k Luma api/services/tests/test_live_sources.py -v`
+
+#### Manual Verification:
+- [ ] Luma events appear in search results
+- [ ] Events have correct titles, dates, and URLs
+- [ ] Events link back to luma.com correctly
+
+---
+
+## Phase 2: Partiful Extractor
+
+### Overview
+Create `PartifulExtractor` for scraping events from partiful.com city pages.
+
+### Changes Required
+
+#### 3.1 Create PartifulExtractor Class
+
+**File**: `api/services/firecrawl.py`
+**Changes**: Add after LumaExtractor class
+
+```python
 class PartifulExtractor(BaseExtractor):
     """
     Extractor for Partiful (partiful.com) events.
@@ -905,7 +595,7 @@ class PartifulExtractor(BaseExtractor):
             return []
 
 
-# Singleton for PartifulExtractor
+# Singleton
 _partiful_extractor: PartifulExtractor | None = None
 
 
@@ -919,22 +609,9 @@ def get_partiful_extractor() -> PartifulExtractor:
 
 async def search_partiful_adapter(profile: Any) -> list[ScrapedEvent]:
     """Adapter for registry pattern - searches Partiful events."""
-    import time
-
     extractor = get_partiful_extractor()
     city = "nyc"  # Default
-
-    logger.debug("📤 [Partiful] Outbound Query | city='%s'", city)
-
-    start_time = time.perf_counter()
     events = await extractor.discover_events(city=city, limit=20)
-    fetch_elapsed = time.perf_counter() - start_time
-
-    logger.debug(
-        "📥 [Partiful] Fetched | events=%d duration=%.2fs",
-        len(events),
-        fetch_elapsed,
-    )
 
     # Post-filter
     filtered = []
@@ -953,8 +630,6 @@ async def search_partiful_adapter(profile: Any) -> list[ScrapedEvent]:
 
 def register_partiful_source() -> None:
     """Register Partiful as an event source."""
-    from api.services.base import EventSource, register_event_source
-
     api_key = os.getenv("FIRECRAWL_API_KEY", "")
 
     source = EventSource(
@@ -965,8 +640,44 @@ def register_partiful_source() -> None:
         description="Partiful social events via Firecrawl scraping",
     )
     register_event_source(source)
+```
 
+#### 3.2 Update Exports and Registration
 
+**File**: `api/services/__init__.py` and `api/index.py`
+**Changes**: Similar to Luma - add exports and registration call
+
+#### 3.3 Add Live Tests
+
+**File**: `api/services/tests/test_live_sources.py`
+**Changes**: Add PartifulExtractor test class (similar pattern to Luma)
+
+### Success Criteria
+
+#### Automated Verification:
+- [x] Type checking passes
+- [x] Unit tests pass
+- [ ] Integration tests pass: `pytest -m integration -k Partiful`
+
+#### Manual Verification:
+- [ ] Partiful events appear in search results
+- [ ] Events have correct data and link to partiful.com
+
+---
+
+## Phase 3: Meetup Scraper
+
+### Overview
+Create `MeetupExtractor` for scraping events from meetup.com search pages.
+
+### Changes Required
+
+#### 3.1 Create MeetupExtractor Class
+
+**File**: `api/services/firecrawl.py`
+**Changes**: Add MeetupExtractor
+
+```python
 class MeetupExtractor(BaseExtractor):
     """
     Extractor for Meetup (meetup.com) events via Firecrawl scraping.
@@ -1082,8 +793,6 @@ class MeetupExtractor(BaseExtractor):
                         href = f"{self.BASE_URL}{href}"
                     event_urls.append(href)
 
-            logger.info("Found %d Meetup event URLs", len(event_urls))
-
             events = []
             for url in event_urls[:limit + 5]:
                 event = await self.extract_event(url)
@@ -1092,76 +801,38 @@ class MeetupExtractor(BaseExtractor):
                     if len(events) >= limit:
                         break
 
-            logger.info("Discovered %d Meetup events", len(events))
             return events
 
         except Exception as e:
             logger.error("Failed to discover Meetup events: %s", e)
             return []
+```
 
+### Success Criteria
 
-# Singleton for MeetupExtractor
-_meetup_extractor: MeetupExtractor | None = None
+#### Automated Verification:
+- [x] Type checking passes
+- [ ] Integration tests pass
 
+#### Manual Verification:
+- [ ] Meetup events appear in search results
+- [ ] Only in-person events are returned
+- [ ] Events link correctly to meetup.com
 
-def get_meetup_extractor() -> MeetupExtractor:
-    """Get the singleton Meetup extractor."""
-    global _meetup_extractor
-    if _meetup_extractor is None:
-        _meetup_extractor = MeetupExtractor()
-    return _meetup_extractor
+---
 
+## Phase 4: Facebook Events Extractor
 
-async def search_meetup_adapter(profile: Any) -> list[ScrapedEvent]:
-    """Adapter for registry pattern - searches Meetup events."""
-    import time
+### Overview
+Create `FacebookExtractor` for scraping public Facebook events.
 
-    extractor = get_meetup_extractor()
-    location = "Columbus, OH"  # Default
+### Changes Required
 
-    logger.debug("📤 [Meetup] Outbound Query | location='%s'", location)
+#### 4.1 Create FacebookExtractor Class
 
-    start_time = time.perf_counter()
-    events = await extractor.discover_events(location=location, limit=20)
-    fetch_elapsed = time.perf_counter() - start_time
+**File**: `api/services/firecrawl.py`
 
-    logger.debug(
-        "📥 [Meetup] Fetched | events=%d duration=%.2fs",
-        len(events),
-        fetch_elapsed,
-    )
-
-    # Post-filter
-    filtered = []
-    for event in events:
-        if hasattr(profile, "time_window") and profile.time_window:
-            if profile.time_window.start and event.start_time:
-                if event.start_time < profile.time_window.start:
-                    continue
-            if profile.time_window.end and event.start_time:
-                if event.start_time > profile.time_window.end:
-                    continue
-        filtered.append(event)
-
-    return filtered
-
-
-def register_meetup_scraper_source() -> None:
-    """Register Meetup scraper as an event source."""
-    from api.services.base import EventSource, register_event_source
-
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
-
-    source = EventSource(
-        name="meetup_scraper",
-        search_fn=search_meetup_adapter,
-        is_enabled_fn=lambda: bool(api_key),
-        priority=28,
-        description="Meetup events via Firecrawl scraping",
-    )
-    register_event_source(source)
-
-
+```python
 class FacebookExtractor(BaseExtractor):
     """
     Extractor for Facebook Events via scraping.
@@ -1268,8 +939,6 @@ class FacebookExtractor(BaseExtractor):
                     if clean_url not in event_urls:
                         event_urls.append(clean_url)
 
-            logger.info("Found %d Facebook event URLs", len(event_urls))
-
             events = []
             for url in event_urls[:limit + 5]:
                 event = await self.extract_event(url)
@@ -1278,76 +947,37 @@ class FacebookExtractor(BaseExtractor):
                     if len(events) >= limit:
                         break
 
-            logger.info("Discovered %d Facebook events", len(events))
             return events
 
         except Exception as e:
             logger.error("Failed to discover Facebook events: %s", e)
             return []
+```
 
+### Success Criteria
 
-# Singleton for FacebookExtractor
-_facebook_extractor: FacebookExtractor | None = None
+#### Automated Verification:
+- [x] Type checking passes
+- [ ] Integration tests pass (may be flaky due to Facebook's protections)
 
+#### Manual Verification:
+- [ ] Facebook events appear when available
+- [ ] Graceful degradation when Facebook blocks requests
 
-def get_facebook_extractor() -> FacebookExtractor:
-    """Get the singleton Facebook extractor."""
-    global _facebook_extractor
-    if _facebook_extractor is None:
-        _facebook_extractor = FacebookExtractor()
-    return _facebook_extractor
+---
 
+## Phase 5: River Extractor
 
-async def search_facebook_adapter(profile: Any) -> list[ScrapedEvent]:
-    """Adapter for registry pattern - searches Facebook events."""
-    import time
+### Overview
+Create `RiverExtractor` for scraping River community events.
 
-    extractor = get_facebook_extractor()
-    query = "Columbus"  # Default
+### Changes Required
 
-    logger.debug("📤 [Facebook] Outbound Query | query='%s'", query)
+#### 5.1 Create RiverExtractor Class
 
-    start_time = time.perf_counter()
-    events = await extractor.discover_events(query=query, limit=20)
-    fetch_elapsed = time.perf_counter() - start_time
+**File**: `api/services/firecrawl.py`
 
-    logger.debug(
-        "📥 [Facebook] Fetched | events=%d duration=%.2fs",
-        len(events),
-        fetch_elapsed,
-    )
-
-    # Post-filter
-    filtered = []
-    for event in events:
-        if hasattr(profile, "time_window") and profile.time_window:
-            if profile.time_window.start and event.start_time:
-                if event.start_time < profile.time_window.start:
-                    continue
-            if profile.time_window.end and event.start_time:
-                if event.start_time > profile.time_window.end:
-                    continue
-        filtered.append(event)
-
-    return filtered
-
-
-def register_facebook_source() -> None:
-    """Register Facebook as an event source."""
-    from api.services.base import EventSource, register_event_source
-
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
-
-    source = EventSource(
-        name="facebook",
-        search_fn=search_facebook_adapter,
-        is_enabled_fn=lambda: bool(api_key),
-        priority=29,
-        description="Facebook events via Firecrawl scraping",
-    )
-    register_event_source(source)
-
-
+```python
 class RiverExtractor(BaseExtractor):
     """
     Extractor for River (getriver.io) community events.
@@ -1455,8 +1085,6 @@ class RiverExtractor(BaseExtractor):
                     if href not in event_urls:
                         event_urls.append(href)
 
-            logger.info("Found %d River event URLs", len(event_urls))
-
             events = []
             for url in event_urls[:limit + 10]:
                 event = await self.extract_event(url)
@@ -1470,75 +1098,61 @@ class RiverExtractor(BaseExtractor):
                     if len(events) >= limit:
                         break
 
-            logger.info("Discovered %d River events", len(events))
             return events
 
         except Exception as e:
             logger.error("Failed to discover River events: %s", e)
             return []
+```
 
+### Success Criteria
 
-# Singleton for RiverExtractor
-_river_extractor: RiverExtractor | None = None
+#### Automated Verification:
+- [x] Type checking passes
+- [ ] Integration tests pass
 
+#### Manual Verification:
+- [ ] River events appear when available
+- [ ] Events are properly filtered by city
 
-def get_river_extractor() -> RiverExtractor:
-    """Get the singleton River extractor."""
-    global _river_extractor
-    if _river_extractor is None:
-        _river_extractor = RiverExtractor()
-    return _river_extractor
+---
 
+## Testing Strategy
 
-async def search_river_adapter(profile: Any) -> list[ScrapedEvent]:
-    """Adapter for registry pattern - searches River events."""
-    import time
+### Unit Tests
+- Mock Firecrawl responses for each extractor
+- Test URL parsing and event ID extraction
+- Test date/time parsing edge cases
+- Test price parsing
 
-    extractor = get_river_extractor()
-    city_filter = None  # No filter by default
+### Integration Tests
+Located in `api/services/tests/test_live_sources.py`:
+- Each extractor has a test class
+- Tests marked with `@pytest.mark.integration`
+- Skipped if `FIRECRAWL_API_KEY` not set
 
-    logger.debug("📤 [River] Outbound Query | city_filter='%s'", city_filter)
+### Manual Testing Steps
+1. Set `FIRECRAWL_API_KEY` in environment
+2. Run: `pytest -m integration api/services/tests/test_live_sources.py -v`
+3. Check logs for successful event discovery
+4. Verify events in search results via UI
 
-    start_time = time.perf_counter()
-    events = await extractor.discover_events(city_filter=city_filter, limit=20)
-    fetch_elapsed = time.perf_counter() - start_time
+---
 
-    logger.debug(
-        "📥 [River] Fetched | events=%d duration=%.2fs",
-        len(events),
-        fetch_elapsed,
-    )
+## Future Sources (Not in This Plan)
 
-    # Post-filter
-    filtered = []
-    for event in events:
-        if hasattr(profile, "time_window") and profile.time_window:
-            if profile.time_window.start and event.start_time:
-                if event.start_time < profile.time_window.start:
-                    continue
-            if profile.time_window.end and event.start_time:
-                if event.start_time > profile.time_window.end:
-                    continue
-        filtered.append(event)
+Document for future implementation:
+- **Ticketmaster** - Discovery API (public)
+- **Dice.fm** - Music/nightlife events
+- **Bandsintown** - Artist events
+- **SeatGeek** - Sports/concerts
+- **Venue Calendars** - Local venue scraping
 
-    return filtered
+---
 
+## References
 
-def register_river_source() -> None:
-    """Register River as an event source."""
-    from api.services.base import EventSource, register_event_source
-
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
-
-    source = EventSource(
-        name="river",
-        search_fn=search_river_adapter,
-        is_enabled_fn=lambda: bool(api_key),
-        priority=30,
-        description="River community events via Firecrawl scraping",
-    )
-    register_event_source(source)
-
-
-# Backward compatibility alias
-LumaEvent = ScrapedEvent
+- Existing pattern: `api/services/firecrawl.py:249-400` (PoshExtractor)
+- Registry: `api/services/base.py:48-124`
+- Research: `thoughts/shared/research/2026-01-11-firecrawl-multi-source-expansion.md`
+- Luma Firecrawl example: https://github.com/alexfazio/firecrawl-quickstarts/blob/main/events-scout-examples/luma.ipynb

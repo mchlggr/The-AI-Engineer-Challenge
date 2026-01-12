@@ -66,8 +66,13 @@ import pytest
 from datetime import datetime, timedelta, UTC
 
 from api.services.firecrawl import (
+    FacebookExtractor,
     FirecrawlClient,
+    LumaExtractor,
+    MeetupExtractor,
+    PartifulExtractor,
     PoshExtractor,
+    RiverExtractor,
     ScrapedEvent,
 )
 from api.services.eventbrite import (
@@ -190,6 +195,51 @@ async def posh_extractor():
     """Create PoshExtractor with cleanup."""
     skip_if_no_firecrawl_key()
     extractor = PoshExtractor()
+    yield extractor
+    await extractor.close()
+
+
+@pytest.fixture
+async def luma_extractor():
+    """Create LumaExtractor with cleanup."""
+    skip_if_no_firecrawl_key()
+    extractor = LumaExtractor()
+    yield extractor
+    await extractor.close()
+
+
+@pytest.fixture
+async def partiful_extractor():
+    """Create PartifulExtractor with cleanup."""
+    skip_if_no_firecrawl_key()
+    extractor = PartifulExtractor()
+    yield extractor
+    await extractor.close()
+
+
+@pytest.fixture
+async def meetup_extractor():
+    """Create MeetupExtractor with cleanup."""
+    skip_if_no_firecrawl_key()
+    extractor = MeetupExtractor()
+    yield extractor
+    await extractor.close()
+
+
+@pytest.fixture
+async def facebook_extractor():
+    """Create FacebookExtractor with cleanup."""
+    skip_if_no_firecrawl_key()
+    extractor = FacebookExtractor()
+    yield extractor
+    await extractor.close()
+
+
+@pytest.fixture
+async def river_extractor():
+    """Create RiverExtractor with cleanup."""
+    skip_if_no_firecrawl_key()
+    extractor = RiverExtractor()
     yield extractor
     await extractor.close()
 
@@ -326,6 +376,253 @@ class TestPoshExtractorLive:
             log_scraped_event(event, i)
 
         print(f"\n  SUCCESS: Found {len(events)} Posh events in New York")
+
+
+@pytest.mark.integration
+class TestLumaExtractorLive:
+    """Live integration tests for LumaExtractor."""
+
+    @pytest.mark.asyncio
+    async def test_discover_events_sf(self, luma_extractor):
+        """Test discovering events for San Francisco."""
+        log_header("Luma", "Discover Events - SF")
+
+        events = await luma_extractor.discover_events(
+            city="sf",
+            limit=5,
+        )
+
+        # Should return list (may be empty if no events or blocked)
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        # If we got events, validate structure and log details
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            assert event.source == "luma"
+            assert event.title  # Title is required
+            assert event.url  # URL is required
+            assert event.event_id  # ID is required
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Luma events in SF")
+
+    @pytest.mark.asyncio
+    async def test_discover_events_nyc(self, luma_extractor):
+        """Test discovering events for NYC."""
+        log_header("Luma", "Discover Events - NYC")
+
+        events = await luma_extractor.discover_events(
+            city="nyc",
+            limit=3,
+        )
+
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Luma events in NYC")
+
+
+@pytest.mark.integration
+class TestPartifulExtractorLive:
+    """Live integration tests for PartifulExtractor."""
+
+    @pytest.mark.asyncio
+    async def test_discover_events_nyc(self, partiful_extractor):
+        """Test discovering events for NYC."""
+        log_header("Partiful", "Discover Events - NYC")
+
+        events = await partiful_extractor.discover_events(
+            city="nyc",
+            limit=5,
+        )
+
+        # Should return list (may be empty if no events or blocked)
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        # If we got events, validate structure and log details
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            assert event.source == "partiful"
+            assert event.title  # Title is required
+            assert event.url  # URL is required
+            assert event.event_id  # ID is required
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Partiful events in NYC")
+
+    @pytest.mark.asyncio
+    async def test_discover_events_sf(self, partiful_extractor):
+        """Test discovering events for SF."""
+        log_header("Partiful", "Discover Events - SF")
+
+        events = await partiful_extractor.discover_events(
+            city="sf",
+            limit=3,
+        )
+
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Partiful events in SF")
+
+
+@pytest.mark.integration
+class TestMeetupExtractorLive:
+    """Live integration tests for MeetupExtractor."""
+
+    @pytest.mark.asyncio
+    async def test_discover_events_columbus(self, meetup_extractor):
+        """Test discovering events for Columbus."""
+        log_header("Meetup", "Discover Events - Columbus")
+
+        events = await meetup_extractor.discover_events(
+            location="Columbus, OH",
+            limit=5,
+        )
+
+        # Should return list (may be empty if no events or blocked)
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        # If we got events, validate structure and log details
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            assert event.source == "meetup"
+            assert event.title  # Title is required
+            assert event.url  # URL is required
+            assert event.event_id  # ID is required
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Meetup events in Columbus")
+
+    @pytest.mark.asyncio
+    async def test_discover_events_new_york(self, meetup_extractor):
+        """Test discovering events for New York."""
+        log_header("Meetup", "Discover Events - New York")
+
+        events = await meetup_extractor.discover_events(
+            location="New York, NY",
+            limit=3,
+        )
+
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Meetup events in New York")
+
+
+@pytest.mark.integration
+class TestFacebookExtractorLive:
+    """Live integration tests for FacebookExtractor.
+
+    Note: Facebook may block scraping requests. These tests may be flaky.
+    """
+
+    @pytest.mark.asyncio
+    async def test_discover_events_columbus(self, facebook_extractor):
+        """Test discovering events for Columbus."""
+        log_header("Facebook", "Discover Events - Columbus")
+
+        events = await facebook_extractor.discover_events(
+            query="Columbus",
+            limit=5,
+        )
+
+        # Should return list (may be empty if blocked)
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        # If we got events, validate structure and log details
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            assert event.source == "facebook"
+            assert event.title  # Title is required
+            assert event.url  # URL is required
+            assert event.event_id  # ID is required
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Facebook events in Columbus")
+
+    @pytest.mark.asyncio
+    async def test_discover_events_new_york(self, facebook_extractor):
+        """Test discovering events for New York."""
+        log_header("Facebook", "Discover Events - New York")
+
+        events = await facebook_extractor.discover_events(
+            query="New York",
+            limit=3,
+        )
+
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} Facebook events in New York")
+
+
+@pytest.mark.integration
+class TestRiverExtractorLive:
+    """Live integration tests for RiverExtractor."""
+
+    @pytest.mark.asyncio
+    async def test_discover_events_all(self, river_extractor):
+        """Test discovering all River events."""
+        log_header("River", "Discover Events - All")
+
+        events = await river_extractor.discover_events(
+            limit=5,
+        )
+
+        # Should return list (may be empty if no events)
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        # If we got events, validate structure and log details
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            assert event.source == "river"
+            assert event.title  # Title is required
+            assert event.url  # URL is required
+            assert event.event_id  # ID is required
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} River events")
+
+    @pytest.mark.asyncio
+    async def test_discover_events_filtered_by_city(self, river_extractor):
+        """Test discovering River events filtered by city."""
+        log_header("River", "Discover Events - Filtered by City")
+
+        events = await river_extractor.discover_events(
+            city_filter="San Francisco",
+            limit=5,
+        )
+
+        assert isinstance(events, list)
+        print(f"\n  Total events found: {len(events)}")
+
+        for i, event in enumerate(events):
+            assert isinstance(event, ScrapedEvent)
+            log_scraped_event(event, i)
+
+        print(f"\n  SUCCESS: Found {len(events)} River events in San Francisco")
 
 
 # ============================================================================
