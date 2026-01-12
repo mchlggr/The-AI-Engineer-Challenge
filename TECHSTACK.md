@@ -282,7 +282,7 @@ python-dotenv                   # Load .env in Python
 
 ```yaml
 # .github/workflows/ci.yml
-- Install deps (uv sync, pnpm install)
+- Install deps (uv sync, npm install)
 - Lint (ruff, biome)
 - Type check (pyright, tsc)
 - Test (pytest, vitest)
